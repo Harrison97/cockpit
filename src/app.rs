@@ -391,13 +391,16 @@ impl App {
             self.save_state();
         }
 
-        // Only refresh visible matches during Searching mode (as user types)
-        // In Navigating mode, we keep stable absolute matches
-        if let SearchMode::Searching(ref query) = self.search_mode {
-            if !query.is_empty() {
-                let query = query.clone();
-                self.refresh_visible_matches(&query);
+        // Refresh visible matches for highlighting in both search modes
+        // This must happen in tick() (right before render) so terminal size is consistent
+        match &self.search_mode {
+            SearchMode::Searching(query) | SearchMode::Navigating(query) => {
+                if !query.is_empty() {
+                    let query = query.clone();
+                    self.refresh_visible_matches(&query);
+                }
             }
+            SearchMode::Off => {}
         }
     }
 
@@ -932,37 +935,31 @@ impl App {
                     // Scroll down one line (j or Down arrow)
                     KeyCode::Char('j') | KeyCode::Down => {
                         self.scroll_terminal_down(1);
-                        self.update_visible_from_absolute();
                         true
                     }
                     // Scroll up one line (k or Up arrow)
                     KeyCode::Char('k') | KeyCode::Up => {
                         self.scroll_terminal_up(1);
-                        self.update_visible_from_absolute();
                         true
                     }
                     // Half-page down (Ctrl+D)
                     KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
                         self.scroll_terminal_half_page_down();
-                        self.update_visible_from_absolute();
                         true
                     }
                     // Half-page up (Ctrl+U)
                     KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
                         self.scroll_terminal_half_page_up();
-                        self.update_visible_from_absolute();
                         true
                     }
                     // Go to top of history
                     KeyCode::Char('g') => {
                         self.scroll_terminal_to_top();
-                        self.update_visible_from_absolute();
                         true
                     }
                     // Go to bottom of history (Shift+G)
                     KeyCode::Char('G') => {
                         self.scroll_terminal_to_bottom();
-                        self.update_visible_from_absolute();
                         true
                     }
                     _ => false,

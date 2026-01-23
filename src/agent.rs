@@ -558,6 +558,7 @@ impl Agent {
 
     /// Find matches in the currently visible terminal content only.
     /// Returns Vec of (row, column_start, match_length) where row is relative to visible area.
+    /// Uses the current scroll_offset that was set by scroll_up/scroll_down.
     pub fn find_visible_matches(&self, query: &str) -> Vec<(usize, usize, usize)> {
         if query.is_empty() {
             return Vec::new();
@@ -568,16 +569,9 @@ impl Agent {
         let query_chars: Vec<char> = query_lower.chars().collect();
 
         if let Ok(mut term) = self.terminal.lock() {
-            let terminal_height = self.last_size.0 as usize;
-
-            // Get max scrollback
-            term.set_scrollback(usize::MAX);
-            let scrollback_max = term.screen().scrollback();
-
-            // Apply safe scroll offset (same logic as render)
-            let safe_max = scrollback_max.min(terminal_height.saturating_sub(1));
-            let safe_offset = (self.scroll_offset as usize).min(safe_max);
-            term.set_scrollback(safe_offset);
+            // Use the current scroll_offset - don't recalculate
+            // This ensures we search the same content that will be rendered
+            term.set_scrollback(self.scroll_offset as usize);
 
             let screen = term.screen();
             let rows = screen.size().0 as usize;
@@ -618,8 +612,6 @@ impl Agent {
                     }
                 }
             }
-
-            // Restore scroll position (already at safe_offset, no change needed)
         }
 
         matches
