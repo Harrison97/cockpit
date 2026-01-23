@@ -14,6 +14,7 @@ use ratatui::{
 };
 
 use crate::agent::{Agent, AgentStatus};
+use crate::app::{App, InputMode};
 
 /// Creates the main vertical layout: header, main content, footer
 ///
@@ -334,38 +335,66 @@ fn render_header(frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-/// Renders the footer with keybinding hints
+/// Renders the footer with keybinding hints or input prompt
 ///
-/// Shows different keybindings based on focus state:
-/// - Agent list focused: "j/k: navigate  Enter: focus  p: pause  r: resume  q: quit"
+/// Shows different content based on input mode and focus state:
+/// - Input mode: Shows input prompt and buffer
+/// - Agent list focused: "j/k: navigate  n: new  Enter: focus  p: pause  r: resume  q: quit"
 /// - Output focused: "j/k: scroll  Esc: back  Ctrl+d/u: page  q: quit"
-fn render_footer(frame: &mut Frame, area: Rect, output_focused: bool) {
-    let hints = if output_focused {
-        " j/k: scroll  Esc: back  Ctrl+d/u: page  q: quit"
-    } else {
-        " j/k: navigate  Enter: focus  p: pause  r: resume  q: quit"
-    };
+fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
+    match app.input_mode {
+        InputMode::Normal => {
+            // Show status message if present, otherwise keybindings
+            let content = if let Some(ref msg) = app.status_message {
+                format!(" {}", msg)
+            } else if app.output_focused {
+                " j/k: scroll  Esc: back  Ctrl+d/u: page  q: quit".to_string()
+            } else {
+                " j/k: navigate  n: new  Enter: focus  p: pause  r: resume  q: quit".to_string()
+            };
 
-    let footer = Paragraph::new(hints).style(Style::default().fg(Color::DarkGray));
+            let style = if app.status_message.is_some() {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
 
-    frame.render_widget(footer, area);
+            let footer = Paragraph::new(content).style(style);
+            frame.render_widget(footer, area);
+        }
+        _ => {
+            // Input mode: show prompt and input buffer
+            let prompt = app.input_prompt();
+            let input = &app.input_buffer;
+
+            let line = Line::from(vec![
+                Span::styled(
+                    format!(" {}", prompt),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(input, Style::default().fg(Color::White)),
+                Span::styled(
+                    "_",
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::SLOW_BLINK),
+                ),
+            ]);
+
+            let footer = Paragraph::new(line);
+            frame.render_widget(footer, area);
+        }
+    }
 }
 
 /// Renders the complete UI for the God Agent Console
 ///
 /// # Arguments
 /// * `frame` - The Ratatui frame to render to
-/// * `agents` - Slice of agents to display
-/// * `selected_index` - Index of the currently selected agent
-/// * `scroll_offset` - Scroll position in the output pane
-/// * `output_focused` - Whether the output pane is focused
-pub fn render(
-    frame: &mut Frame,
-    agents: &[Agent],
-    selected_index: usize,
-    scroll_offset: usize,
-    output_focused: bool,
-) {
+/// * `app` - The application state
+pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
     // Create main vertical layout: header, main content, footer
@@ -378,18 +407,18 @@ pub fn render(
     render_header(frame, header_area);
 
     // Render agent list
-    render_agent_list(frame, agent_list_area, agents, selected_index);
+    render_agent_list(frame, agent_list_area, &app.agents, app.selected_index);
 
     // Render output pane for selected agent
-    let selected_agent = agents.get(selected_index);
+    let selected_agent = app.agents.get(app.selected_index);
     render_output_pane(
         frame,
         output_area,
         selected_agent,
-        scroll_offset,
-        output_focused,
+        app.scroll_offset,
+        app.output_focused,
     );
 
-    // Render footer with keybinding hints
-    render_footer(frame, footer_area, output_focused);
+    // Render footer with keybinding hints or input prompt
+    render_footer(frame, footer_area, app);
 }

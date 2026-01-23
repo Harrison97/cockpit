@@ -37,13 +37,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
     while app.running {
         // Draw the UI
         terminal.draw(|frame| {
-            ui::render(
-                frame,
-                &app.agents,
-                app.selected_index,
-                app.scroll_offset,
-                app.output_focused,
-            );
+            ui::render(frame, &app);
         })?;
 
         // Poll for events with 16ms timeout (~60 FPS)

@@ -6,8 +6,22 @@
 
 use crate::agent::{create_demo_agents, Agent, AgentStatus};
 use crate::loop_manager::OutputLine;
+use crate::project::RalphProject;
+use std::path::PathBuf;
 use std::time::Instant;
 use tokio::sync::mpsc;
+
+/// Input mode determines what kind of input the user is currently providing
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum InputMode {
+    /// Normal mode - regular keybindings work
+    #[default]
+    Normal,
+    /// Entering project path for new loop
+    EnteringPath,
+    /// Entering prompt content for new loop
+    EnteringPrompt,
+}
 
 /// Channel buffer size for subprocess output
 const OUTPUT_CHANNEL_SIZE: usize = 1000;
@@ -35,6 +49,14 @@ pub struct App {
     pub output_tx: mpsc::Sender<OutputLine>,
     /// Receiver for subprocess output - drained in tick()
     output_rx: mpsc::Receiver<OutputLine>,
+    /// Current input mode
+    pub input_mode: InputMode,
+    /// Current input buffer for text entry
+    pub input_buffer: String,
+    /// Pending project path (set during EnteringPath, used when moving to EnteringPrompt)
+    pending_project_path: Option<PathBuf>,
+    /// Status message to display (cleared after showing)
+    pub status_message: Option<String>,
 }
 
 impl App {
@@ -53,6 +75,10 @@ impl App {
             frame_count: 0,
             output_tx,
             output_rx,
+            input_mode: InputMode::Normal,
+            input_buffer: String::new(),
+            pending_project_path: None,
+            status_message: None,
         }
     }
 
@@ -279,9 +305,100 @@ impl App {
         }
     }
 
+    /// Starts the "new loop" flow by entering path input mode
+    pub fn start_new_loop(&mut self) {
+        self.input_mode = InputMode::EnteringPath;
+        self.input_buffer.clear();
+        self.pending_project_path = None;
+    }
+
+    /// Cancels input mode and returns to normal
+    pub fn cancel_input(&mut self) {
+        self.input_mode = InputMode::Normal;
+        self.input_buffer.clear();
+        self.pending_project_path = None;
+    }
+
+    /// Submits the current input based on input mode
+    fn submit_input(&mut self) {
+        match self.input_mode {
+            InputMode::Normal => {}
+            InputMode::EnteringPath => {
+                // Validate and store the path, move to prompt entry
+                let path = PathBuf::from(self.input_buffer.trim());
+                if path.as_os_str().is_empty() {
+                    self.status_message = Some("Path cannot be empty".to_string());
+                    return;
+                }
+                self.pending_project_path = Some(path);
+                self.input_buffer.clear();
+                self.input_mode = InputMode::EnteringPrompt;
+            }
+            InputMode::EnteringPrompt => {
+                // Create the project and add agent
+                self.create_loop_from_input();
+            }
+        }
+    }
+
+    /// Creates a new loop project and adds it as an agent
+    fn create_loop_from_input(&mut self) {
+        let Some(project_path) = self.pending_project_path.take() else {
+            self.status_message = Some("No project path set".to_string());
+            self.cancel_input();
+            return;
+        };
+
+        // Use default prompt if empty
+        let prompt_content = if self.input_buffer.trim().is_empty() {
+            default_prompt_content()
+        } else {
+            self.input_buffer.clone()
+        };
+
+        // Create the project
+        match RalphProject::create(project_path.clone(), &prompt_content) {
+            Ok(_project) => {
+                // Derive agent name from directory name
+                let name = project_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unnamed")
+                    .to_string();
+
+                // Create agent with project path
+                let agent = Agent::with_project(&name, project_path);
+                self.agents.push(agent);
+
+                // Select the new agent
+                self.selected_index = self.agents.len() - 1;
+                self.scroll_offset = 0;
+                self.pinned_to_bottom = true;
+
+                self.status_message = Some(format!("Created loop: {}", name));
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Failed to create project: {}", e));
+            }
+        }
+
+        // Return to normal mode
+        self.input_buffer.clear();
+        self.input_mode = InputMode::Normal;
+    }
+
+    /// Returns the prompt text to show for the current input mode
+    pub fn input_prompt(&self) -> &str {
+        match self.input_mode {
+            InputMode::Normal => "",
+            InputMode::EnteringPath => "Project path: ",
+            InputMode::EnteringPrompt => "Prompt (Enter for default): ",
+        }
+    }
+
     /// Handles a key press event
     ///
-    /// Dispatches to the appropriate handler based on key code.
+    /// Dispatches to the appropriate handler based on key code and input mode.
     /// Returns true if the key was handled.
     pub fn handle_key(
         &mut self,
@@ -289,6 +406,14 @@ impl App {
         modifiers: crossterm::event::KeyModifiers,
     ) -> bool {
         use crossterm::event::{KeyCode, KeyModifiers};
+
+        // Clear status message on any key press
+        self.status_message = None;
+
+        // Handle input modes first
+        if self.input_mode != InputMode::Normal {
+            return self.handle_input_key(code, modifiers);
+        }
 
         // Global keybindings (work regardless of focus state)
         match code {
@@ -369,10 +494,65 @@ impl App {
                     self.stop_selected();
                     true
                 }
+                // New loop creation
+                KeyCode::Char('n') => {
+                    self.start_new_loop();
+                    true
+                }
                 _ => false,
             }
         }
     }
+
+    /// Handles key presses during input mode (text entry)
+    fn handle_input_key(
+        &mut self,
+        code: crossterm::event::KeyCode,
+        _modifiers: crossterm::event::KeyModifiers,
+    ) -> bool {
+        use crossterm::event::KeyCode;
+
+        match code {
+            KeyCode::Enter => {
+                self.submit_input();
+                true
+            }
+            KeyCode::Esc => {
+                self.cancel_input();
+                true
+            }
+            KeyCode::Backspace => {
+                self.input_buffer.pop();
+                true
+            }
+            KeyCode::Char(c) => {
+                self.input_buffer.push(c);
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Returns the default prompt content for new projects
+fn default_prompt_content() -> String {
+    r#"# Ralph Loop Prompt
+
+You are an autonomous agent running in a loop. Each iteration:
+
+1. Read IMPLEMENTATION_PLAN.md to find the next uncompleted task
+2. Implement the task completely
+3. Run tests and quality checks
+4. Mark the task complete and commit
+5. Exit
+
+## Rules
+
+- Complete ONE task per iteration
+- Always run `cargo build` and `cargo clippy` before committing
+- Keep changes focused and minimal
+"#
+    .to_string()
 }
 
 impl Default for App {

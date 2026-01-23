@@ -78,7 +78,7 @@
   - Create empty IMPLEMENTATION_PLAN.md
   - Create specs/ directory
 
-- [ ] **3.4 Add create loop UI**
+- [x] **3.4 Add create loop UI**
   - Add keybinding `n` for new loop
   - Prompt for project path
   - Prompt for prompt content (or use default)
