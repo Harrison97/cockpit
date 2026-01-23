@@ -245,7 +245,7 @@
   - Enter confirms and switches to `Navigating` mode
   - Esc cancels and returns to normal focused mode
 
-- [ ] **11.3 Implement search highlighting**
+- [x] **11.3 Implement search highlighting**
   - Search through terminal scrollback buffer for matches
   - Highlight matches in terminal render (yellow background)
   - Current match gets distinct highlight (cyan background)

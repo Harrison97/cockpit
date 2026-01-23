@@ -319,6 +319,33 @@ impl App {
         if status_changed {
             self.save_state();
         }
+
+        // Refresh search matches if in search mode (handles scrolling/new content)
+        if let Some(query) = self.search_query().map(|s| s.to_string()) {
+            if !query.is_empty() {
+                self.refresh_search_matches(&query);
+            }
+        }
+    }
+
+    /// Refresh search matches without changing the query (for scroll/content updates)
+    fn refresh_search_matches(&mut self, query: &str) {
+        if let Some(agent) = self.selected_agent() {
+            let matches: Vec<(usize, usize)> = agent
+                .find_matches(query)
+                .into_iter()
+                .map(|(line, col, _len)| (line, col))
+                .collect();
+
+            self.search_matches = matches;
+
+            // Keep current index in bounds
+            if self.search_matches.is_empty() {
+                self.search_current = 0;
+            } else if self.search_current >= self.search_matches.len() {
+                self.search_current = self.search_matches.len() - 1;
+            }
+        }
     }
 
     /// Send keyboard input to the focused agent's PTY
@@ -760,14 +787,18 @@ impl App {
                         // Remove last character from query
                         let mut new_query = query.clone();
                         new_query.pop();
-                        self.search_mode = SearchMode::Searching(new_query);
+                        self.search_mode = SearchMode::Searching(new_query.clone());
+                        // Update matches incrementally
+                        self.update_search_matches(&new_query);
                         true
                     }
                     KeyCode::Char(c) => {
                         // Add character to query
                         let mut new_query = query.clone();
                         new_query.push(c);
-                        self.search_mode = SearchMode::Searching(new_query);
+                        self.search_mode = SearchMode::Searching(new_query.clone());
+                        // Update matches incrementally
+                        self.update_search_matches(&new_query);
                         true
                     }
                     _ => false,
@@ -783,6 +814,34 @@ impl App {
                     }
                     _ => false,
                 }
+            }
+        }
+    }
+
+    /// Update search matches based on current query
+    fn update_search_matches(&mut self, query: &str) {
+        if query.is_empty() {
+            self.search_matches.clear();
+            self.search_current = 0;
+            return;
+        }
+
+        if let Some(agent) = self.selected_agent() {
+            // Find all matches - agent.find_matches returns (line, col, len)
+            // We store (line, col) for compatibility with existing structure
+            let matches: Vec<(usize, usize)> = agent
+                .find_matches(query)
+                .into_iter()
+                .map(|(line, col, _len)| (line, col))
+                .collect();
+
+            self.search_matches = matches;
+
+            // Keep current index in bounds, or set to last match
+            if self.search_matches.is_empty() {
+                self.search_current = 0;
+            } else if self.search_current >= self.search_matches.len() {
+                self.search_current = self.search_matches.len() - 1;
             }
         }
     }

@@ -15,6 +15,14 @@ use tui_term::widget::PseudoTerminal;
 use crate::agent::{Agent, AgentStatus, AgentType};
 use crate::app::{App, InputMode, SearchMode, LINES_PER_AGENT};
 
+/// Search state passed to terminal rendering
+pub struct SearchState {
+    pub mode: SearchMode,
+    pub matches: Vec<(usize, usize)>,
+    pub current: usize,
+    pub query_len: usize,
+}
+
 fn create_main_layout(area: Rect) -> (Rect, Rect, Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -77,15 +85,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         app.selected_index,
         app.list_scroll_offset,
     );
-    // Read output_focused and search_mode before borrowing app mutably
+    // Read output_focused and search state before borrowing app mutably
     let output_focused = app.output_focused;
-    let search_mode = app.search_mode.clone();
+    let search_state = SearchState {
+        mode: app.search_mode.clone(),
+        matches: app.search_matches.clone(),
+        current: app.search_current,
+        query_len: app.search_query().map(|q| q.len()).unwrap_or(0),
+    };
     render_terminal_pane(
         frame,
         output_pane_area,
         app.selected_agent_mut(),
         output_focused,
-        &search_mode,
+        &search_state,
     );
     render_footer(frame, footer_area, app);
 
@@ -319,9 +332,9 @@ fn render_terminal_pane(
     area: Rect,
     agent: Option<&mut Agent>,
     output_focused: bool,
-    search_mode: &SearchMode,
+    search: &SearchState,
 ) {
-    let is_searching = !matches!(search_mode, SearchMode::Off);
+    let is_searching = !matches!(search.mode, SearchMode::Off);
 
     // Build title - need to access terminal to get scrollback info
     let (title, scroll_offset) = match agent.as_ref() {
@@ -339,7 +352,17 @@ fn render_terminal_pane(
                 })
                 .unwrap_or(0);
             let focus_hint = if is_searching {
-                " [SEARCH MODE]".to_string()
+                if !search.matches.is_empty() {
+                    format!(
+                        " [SEARCH: Match {}/{}]",
+                        search.current + 1,
+                        search.matches.len()
+                    )
+                } else if search.query_len > 0 {
+                    " [SEARCH: No matches]".to_string()
+                } else {
+                    " [SEARCH MODE]".to_string()
+                }
             } else if output_focused {
                 if a.scroll_offset > 0 {
                     format!(
@@ -448,6 +471,41 @@ fn render_terminal_pane(
         let screen = term.screen();
         let pseudo_term = PseudoTerminal::new(screen);
         frame.render_widget(pseudo_term, terminal_area);
+
+        // Apply search highlighting if there are matches
+        // Matches are (row, col, len) where row is the display row (0 = top)
+        if !search.matches.is_empty() && search.query_len > 0 {
+            let buf = frame.buffer_mut();
+
+            for (match_idx, &(row, col_start)) in search.matches.iter().enumerate() {
+                // Check if this row is within visible terminal area
+                if row < terminal_height {
+                    let screen_y = terminal_area.y + row as u16;
+
+                    // Highlight each character of the match
+                    let highlight_bg = if match_idx == search.current {
+                        Color::Cyan // Current match
+                    } else {
+                        Color::Yellow // Other matches
+                    };
+
+                    for offset in 0..search.query_len {
+                        let screen_x = terminal_area.x + (col_start + offset) as u16;
+
+                        // Make sure we're within bounds
+                        if screen_x < terminal_area.x + terminal_area.width
+                            && screen_y < terminal_area.y + terminal_area.height
+                        {
+                            if let Some(cell) = buf.cell_mut((screen_x, screen_y)) {
+                                cell.set_bg(highlight_bg);
+                                // For visibility, set foreground to black for highlighted cells
+                                cell.set_fg(Color::Black);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     } else {
         let msg = Paragraph::new("Terminal unavailable").style(Style::default().fg(Color::Red));
         frame.render_widget(msg, terminal_area);
@@ -455,12 +513,24 @@ fn render_terminal_pane(
 
     // Render search box if in search mode
     if let Some(search_area) = search_area {
-        render_search_box(frame, search_area, search_mode);
+        render_search_box(
+            frame,
+            search_area,
+            &search.mode,
+            search.matches.len(),
+            search.current,
+        );
     }
 }
 
 /// Renders the search input box at the bottom of the terminal pane
-fn render_search_box(frame: &mut Frame, area: Rect, search_mode: &SearchMode) {
+fn render_search_box(
+    frame: &mut Frame,
+    area: Rect,
+    search_mode: &SearchMode,
+    match_count: usize,
+    current_match: usize,
+) {
     let (query, is_navigating) = match search_mode {
         SearchMode::Searching(q) => (q.as_str(), false),
         SearchMode::Navigating(q) => (q.as_str(), true),
@@ -470,10 +540,20 @@ fn render_search_box(frame: &mut Frame, area: Rect, search_mode: &SearchMode) {
     let prefix = if is_navigating { "/" } else { "Search: " };
     let cursor = if is_navigating { "" } else { "_" };
 
+    // Build match count suffix
+    let match_suffix = if match_count > 0 {
+        format!(" [{}/{}]", current_match + 1, match_count)
+    } else if !query.is_empty() {
+        " [No matches]".to_string()
+    } else {
+        String::new()
+    };
+
     let available_width = area.width as usize;
     let prefix_len = prefix.chars().count();
     let cursor_len = cursor.chars().count();
-    let max_query_display = available_width.saturating_sub(prefix_len + cursor_len);
+    let suffix_len = match_suffix.chars().count();
+    let max_query_display = available_width.saturating_sub(prefix_len + cursor_len + suffix_len);
 
     // Truncate query from left if too long
     let displayed_query = if query.chars().count() > max_query_display {
@@ -487,6 +567,7 @@ fn render_search_box(frame: &mut Frame, area: Rect, search_mode: &SearchMode) {
         Span::styled(prefix, Style::default().fg(Color::Yellow)),
         Span::styled(displayed_query, Style::default().fg(Color::White)),
         Span::styled(cursor, Style::default().fg(Color::White)),
+        Span::styled(match_suffix, Style::default().fg(Color::Cyan)),
     ]);
 
     let search_bar = Paragraph::new(line).style(Style::default().bg(Color::DarkGray));

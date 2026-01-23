@@ -68,7 +68,11 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
     let mut last_input = std::time::Instant::now();
 
     while app.running {
-        // Draw the UI
+        // Update application state FIRST (process agent output, refresh search matches)
+        // This ensures render sees fresh data
+        app.tick();
+
+        // Draw the UI with updated state
         terminal.draw(|frame| {
             ui::draw(frame, &mut app);
         })?;
@@ -129,9 +133,6 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
                 continue; // Loop back to drain events
             }
         }
-
-        // Update application state (process agent output, etc.)
-        app.tick();
     }
 
     // Gracefully shutdown: stop all subprocesses and save state
