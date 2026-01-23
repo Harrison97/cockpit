@@ -430,30 +430,24 @@ impl App {
         }
     }
 
-    /// Update visible matches to reflect which matches are on screen at current scroll position
+    /// Update visible matches by re-searching the current visible content
+    /// This is simpler and more reliable than trying to convert absolute positions
     fn update_visible_from_absolute(&mut self) {
+        // Get the current search query
+        let query = match &self.search_mode {
+            SearchMode::Navigating(q) => q.clone(),
+            _ => return,
+        };
+
         if let Some(agent) = self.selected_agent() {
-            let (scroll_offset, safe_max) = agent.get_scroll_state();
-            let terminal_height = agent.terminal_height() as usize;
-
-            // Calculate which absolute rows are visible
-            // At scroll_offset, visible rows are: safe_max - scroll_offset to safe_max - scroll_offset + terminal_height
-            let visible_start = safe_max.saturating_sub(scroll_offset);
-            let visible_end = visible_start + terminal_height;
-
-            self.search_matches = self
-                .search_matches_absolute
-                .iter()
-                .filter_map(|&(abs_row, col, _len)| {
-                    if abs_row >= visible_start && abs_row < visible_end {
-                        // Convert absolute row to visible row
-                        let visible_row = abs_row - visible_start;
-                        Some((visible_row, col))
-                    } else {
-                        None
-                    }
-                })
+            // Just re-search the visible content
+            let matches: Vec<(usize, usize)> = agent
+                .find_visible_matches(&query)
+                .into_iter()
+                .map(|(line, col, _len)| (line, col))
                 .collect();
+
+            self.search_matches = matches;
         }
     }
 
