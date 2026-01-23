@@ -310,6 +310,23 @@ fn render_header(frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
+/// Renders the footer with keybinding hints
+///
+/// Shows different keybindings based on focus state:
+/// - Agent list focused: "j/k: navigate  Enter: focus  p: pause  r: resume  q: quit"
+/// - Output focused: "j/k: scroll  Esc: back  Ctrl+d/u: page  q: quit"
+fn render_footer(frame: &mut Frame, area: Rect, output_focused: bool) {
+    let hints = if output_focused {
+        "j/k: scroll  Esc: back  Ctrl+d/u: page  q: quit"
+    } else {
+        "j/k: navigate  Enter: focus  p: pause  r: resume  q: quit"
+    };
+
+    let footer = Paragraph::new(hints).style(Style::default().fg(Color::DarkGray));
+
+    frame.render_widget(footer, area);
+}
+
 /// Renders the complete UI for the God Agent Console
 ///
 /// # Arguments
@@ -349,8 +366,6 @@ pub fn render(
         output_focused,
     );
 
-    // TODO: Render footer (task 3.6)
-
-    // Suppress unused variable warnings for now
-    let _ = footer_area;
+    // Render footer with keybinding hints
+    render_footer(frame, footer_area, output_focused);
 }

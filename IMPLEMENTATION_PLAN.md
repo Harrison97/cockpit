@@ -59,7 +59,7 @@
   - Each line prefixed with timestamp
   - Support scrolling (track scroll offset)
 
-- [ ] **3.6 Implement footer rendering**
+- [x] **3.6 Implement footer rendering**
   - Single line with keybinding hints
   - Format: "j/k: navigate  Enter: focus  p: pause  r: resume  q: quit"
   - Dim styling
