@@ -56,7 +56,7 @@ After completing ONE task and committing:
 
 - Update IMPLEMENTATION_PLAN.md to mark the item done
 - Commit all changes
-- Run cmd: say "I'm done."
+- Run cmd: say "I'm done with {task}."
 - Exit immediately
 
 The outer loop will restart you with fresh context for the next task.
