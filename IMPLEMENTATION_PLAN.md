@@ -296,7 +296,7 @@
   - Fix the root cause: validate scrollback before each render
   - Allow scrolling through entire scrollback buffer
 
-- [ ] **13.3 Create disk-backed history storage**
+- [x] **13.3 Create disk-backed history storage**
   - Create `~/.cockpit/agents/{name}/history.log` file
   - Append all terminal output to this file (raw bytes)
   - On startup, load recent history into vt100 buffer

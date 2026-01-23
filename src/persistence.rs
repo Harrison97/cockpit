@@ -13,6 +13,8 @@ use std::path::PathBuf;
 
 const APP_NAME: &str = "cockpit";
 const STATE_FILE: &str = "state.json";
+const AGENTS_DIR: &str = "agents";
+const HISTORY_FILE: &str = "history.log";
 
 pub fn get_data_dir() -> Option<PathBuf> {
     if let Some(proj_dirs) = ProjectDirs::from("", "", APP_NAME) {
@@ -30,6 +32,16 @@ fn dirs_fallback() -> Option<PathBuf> {
 
 pub fn get_state_file_path() -> Option<PathBuf> {
     get_data_dir().map(|dir| dir.join(STATE_FILE))
+}
+
+/// Get the directory for agent data files: `~/.cockpit/agents/{name}/`
+pub fn get_agent_data_dir(agent_name: &str) -> Option<PathBuf> {
+    get_data_dir().map(|dir| dir.join(AGENTS_DIR).join(agent_name))
+}
+
+/// Get the history file path for an agent: `~/.cockpit/agents/{name}/history.log`
+pub fn get_history_file_path(agent_name: &str) -> Option<PathBuf> {
+    get_agent_data_dir(agent_name).map(|dir| dir.join(HISTORY_FILE))
 }
 
 /// State of a single loop persisted to disk

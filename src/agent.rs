@@ -3,9 +3,12 @@
 #![allow(dead_code)]
 
 use crate::loop_manager::{LoopError, RalphLoop, TerminalData};
+use crate::persistence::get_history_file_path;
 use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufReader, Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -179,6 +182,8 @@ pub struct Agent {
     last_size: (u16, u16),
     /// Process readiness state for blocking input during transitions
     pub process_state: ProcessState,
+    /// File handle for writing terminal history to disk
+    history_file: Option<File>,
 }
 
 impl Agent {
@@ -200,6 +205,7 @@ impl Agent {
             agent_type: AgentType::default(),
             scroll_offset: 0,
             process_state: ProcessState::Stopped,
+            history_file: None,
         }
     }
 
@@ -209,15 +215,23 @@ impl Agent {
         working_dir: PathBuf,
         agent_type: AgentType,
     ) -> Self {
+        let terminal = Arc::new(Mutex::new(vt100::Parser::new(
+            TERM_ROWS,
+            TERM_COLS,
+            SCROLLBACK_SIZE,
+        )));
+
+        // Load existing history from disk into terminal buffer
+        Self::load_history_into_terminal(name, &terminal);
+
+        // Open history file for appending (creates if needed)
+        let history_file = Self::open_history_file(name);
+
         Self {
             name: name.to_string(),
             status: AgentStatus::Stopped,
             start_time: None,
-            terminal: Arc::new(Mutex::new(vt100::Parser::new(
-                TERM_ROWS,
-                TERM_COLS,
-                SCROLLBACK_SIZE,
-            ))),
+            terminal,
             iteration: 0,
             project_path: Some(project_path),
             working_dir: Some(working_dir),
@@ -226,6 +240,71 @@ impl Agent {
             scroll_offset: 0,
             last_size: (TERM_ROWS, TERM_COLS),
             process_state: ProcessState::Stopped,
+            history_file,
+        }
+    }
+
+    /// Open the history file for appending, creating the directory structure if needed
+    fn open_history_file(agent_name: &str) -> Option<File> {
+        let path = get_history_file_path(agent_name)?;
+
+        // Create parent directories if needed
+        if let Some(parent) = path.parent() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                eprintln!("Failed to create history directory: {}", e);
+                return None;
+            }
+        }
+
+        // Open file in append mode, create if doesn't exist
+        match OpenOptions::new().create(true).append(true).open(&path) {
+            Ok(file) => Some(file),
+            Err(e) => {
+                eprintln!("Failed to open history file: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Load recent history from disk into the terminal buffer.
+    /// Reads the last ~1MB of history to avoid loading huge files.
+    fn load_history_into_terminal(agent_name: &str, terminal: &Arc<Mutex<vt100::Parser>>) {
+        let Some(path) = get_history_file_path(agent_name) else {
+            return;
+        };
+
+        if !path.exists() {
+            return;
+        }
+
+        // Read the history file, limiting to last ~1MB for performance
+        const MAX_HISTORY_BYTES: u64 = 1024 * 1024; // 1MB
+
+        let file = match File::open(&path) {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+
+        let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let mut reader = BufReader::new(file);
+
+        // If file is larger than limit, seek to the last MAX_HISTORY_BYTES
+        let data = if file_size > MAX_HISTORY_BYTES {
+            use std::io::Seek;
+            let mut reader = reader.into_inner();
+            let _ = reader.seek(std::io::SeekFrom::End(-(MAX_HISTORY_BYTES as i64)));
+            let mut buf = Vec::with_capacity(MAX_HISTORY_BYTES as usize);
+            let _ = reader.read_to_end(&mut buf);
+            buf
+        } else {
+            let mut buf = Vec::with_capacity(file_size as usize);
+            let _ = reader.read_to_end(&mut buf);
+            buf
+        };
+
+        // Feed the data into the terminal parser
+        if let Ok(mut term) = terminal.lock() {
+            term.process(&data);
         }
     }
 
@@ -256,6 +335,13 @@ impl Agent {
             if self.process_state == ProcessState::Starting && !data.is_empty() {
                 self.process_state = ProcessState::Ready;
             }
+        }
+
+        // Append raw data to history file for persistence
+        if let Some(ref mut file) = self.history_file {
+            // Write the raw bytes (before filtering) to preserve full history
+            let _ = file.write_all(data);
+            // Flush periodically isn't needed - OS buffers and we don't need real-time sync
         }
 
         // Filter out mouse escape sequences that may leak from PTY
