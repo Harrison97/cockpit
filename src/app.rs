@@ -19,6 +19,9 @@ pub struct App {
     pub output_focused: bool,
     /// Whether the application is still running
     pub running: bool,
+    /// Whether to auto-scroll to bottom when new output arrives
+    /// Set to false when user manually scrolls up, true when scrolling to bottom
+    pinned_to_bottom: bool,
     /// Last time we updated agent outputs
     last_tick: Instant,
     /// Frame counter for timing updates
@@ -35,6 +38,7 @@ impl App {
             scroll_offset: 0,
             output_focused: false,
             running: true,
+            pinned_to_bottom: true,
             last_tick: Instant::now(),
             frame_count: 0,
         }
@@ -48,8 +52,9 @@ impl App {
             return;
         }
         self.selected_index = (self.selected_index + 1) % self.agents.len();
-        // Reset scroll offset when changing selection
+        // Reset scroll and enable auto-scroll when changing selection
         self.scroll_offset = 0;
+        self.pinned_to_bottom = true;
     }
 
     /// Selects the previous agent in the list
@@ -64,8 +69,9 @@ impl App {
         } else {
             self.selected_index -= 1;
         }
-        // Reset scroll offset when changing selection
+        // Reset scroll and enable auto-scroll when changing selection
         self.scroll_offset = 0;
+        self.pinned_to_bottom = true;
     }
 
     /// Returns a reference to the currently selected agent
@@ -88,8 +94,9 @@ impl App {
             return;
         }
         self.selected_index = 0;
-        // Reset scroll offset when changing selection
+        // Reset scroll and enable auto-scroll when changing selection
         self.scroll_offset = 0;
+        self.pinned_to_bottom = true;
     }
 
     /// Selects the last agent in the list
@@ -98,8 +105,9 @@ impl App {
             return;
         }
         self.selected_index = self.agents.len() - 1;
-        // Reset scroll offset when changing selection
+        // Reset scroll and enable auto-scroll when changing selection
         self.scroll_offset = 0;
+        self.pinned_to_bottom = true;
     }
 
     /// Pauses the currently selected agent (if running)
@@ -128,9 +136,10 @@ impl App {
     /// Toggles focus between agent list and output pane
     pub fn toggle_focus(&mut self) {
         self.output_focused = !self.output_focused;
-        // Reset scroll offset when focusing output pane
+        // Reset scroll and enable auto-scroll when focusing output pane
         if self.output_focused {
-            // Scroll to bottom when entering focus
+            // Scroll to bottom and enable auto-scroll when entering focus
+            self.pinned_to_bottom = true;
             self.scroll_to_bottom();
         }
     }
@@ -144,6 +153,8 @@ impl App {
     pub fn scroll_up(&mut self) {
         if self.scroll_offset > 0 {
             self.scroll_offset -= 1;
+            // User is manually scrolling up, disable auto-scroll
+            self.pinned_to_bottom = false;
         }
     }
 
@@ -156,13 +167,22 @@ impl App {
             if self.scroll_offset < output_len {
                 self.scroll_offset += 1;
             }
+            // If we've scrolled to the bottom (or beyond), re-enable auto-scroll
+            if self.scroll_offset >= output_len {
+                self.pinned_to_bottom = true;
+            }
         }
     }
 
     /// Scrolls the output pane up by half a page (approximately)
     pub fn page_up(&mut self) {
         // Scroll up by 10 lines (approximate half page)
+        let old_offset = self.scroll_offset;
         self.scroll_offset = self.scroll_offset.saturating_sub(10);
+        // If we actually scrolled up, disable auto-scroll
+        if self.scroll_offset < old_offset {
+            self.pinned_to_bottom = false;
+        }
     }
 
     /// Scrolls the output pane down by half a page (approximately)
@@ -171,6 +191,10 @@ impl App {
         if let Some(agent) = self.selected_agent() {
             let output_len = agent.output.len();
             self.scroll_offset = (self.scroll_offset + 10).min(output_len);
+            // If we've scrolled to the bottom (or beyond), re-enable auto-scroll
+            if self.scroll_offset >= output_len {
+                self.pinned_to_bottom = true;
+            }
         }
     }
 
@@ -186,15 +210,35 @@ impl App {
     /// Called each frame to update application state
     ///
     /// Updates running agents' mock output at randomized intervals (2-5 seconds per agent)
+    /// Auto-scrolls to bottom when new output is added if pinned_to_bottom is true
     pub fn tick(&mut self) {
         self.frame_count += 1;
         self.last_tick = Instant::now();
+
+        // Track if the selected agent's output length changes
+        let selected_output_len_before = self
+            .agents
+            .get(self.selected_index)
+            .map(|a| a.output.len())
+            .unwrap_or(0);
 
         // Check each agent for output updates (each has its own random timer)
         for agent in &mut self.agents {
             if agent.is_output_due() {
                 agent.add_next_mock_output();
             }
+        }
+
+        // Check if selected agent got new output
+        let selected_output_len_after = self
+            .agents
+            .get(self.selected_index)
+            .map(|a| a.output.len())
+            .unwrap_or(0);
+
+        // Auto-scroll to bottom if pinned and new output was added to selected agent
+        if self.pinned_to_bottom && selected_output_len_after > selected_output_len_before {
+            self.scroll_to_bottom();
         }
     }
 

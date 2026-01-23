@@ -105,7 +105,7 @@
   - Cycle through predefined output messages
   - Increment iteration counter every ~10 messages
 
-- [ ] **5.2 Add auto-scroll behavior**
+- [x] **5.2 Add auto-scroll behavior**
   - When new output added, auto-scroll to bottom
   - Only if user hasn't manually scrolled up
   - Track "pinned to bottom" state
