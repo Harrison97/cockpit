@@ -5,7 +5,7 @@ Last verified: 2026-01-23
 ## Memory Safety
 
 - [x] Scrollback bounded - verified 2026-01-23 (SCROLLBACK_SIZE = 100,000 lines in agent.rs:105)
-- [x] History file capped at 1MB on load - verified 2026-01-23 (MAX_HISTORY_BYTES in agent.rs:294)
+- [x] History file capped at 1MB on load - verified 2026-01-23 (MAX_HISTORY_BYTES in agent.rs:296)
 - [x] Channel bounded - verified 2026-01-23 (OUTPUT_CHANNEL_SIZE = 1000 in app.rs:36)
 - [x] Search matches bounded - verified 2026-01-23 (MAX_SEARCH_MATCHES = 10,000 in agent.rs:107)
 
@@ -42,5 +42,5 @@ Last verified: 2026-01-23
 ## Performance
 
 - [x] Tick rate 60 FPS active, 10 FPS idle - verified 2026-01-23 (main.rs:105-109)
-- [x] PTY reads in 4KB chunks - verified 2026-01-23 (buf = [0u8; 4096] in loop_manager.rs:465)
+- [x] PTY reads in 4KB chunks - verified 2026-01-23 (buf = [0u8; 4096] in loop_manager.rs:488)
 - [x] Mouse events coalesced - verified 2026-01-23 (scroll_delta accumulation in main.rs:113-148)
