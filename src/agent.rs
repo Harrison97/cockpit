@@ -101,6 +101,8 @@ pub struct Agent {
     pub ralph_loop: Option<RalphLoop>,
     /// Type of agent: RalphLoop or ClaudeInstance
     pub agent_type: AgentType,
+    /// Scroll offset for terminal pane (0 = bottom, positive = scrolled up)
+    pub scroll_offset: u16,
 }
 
 impl Agent {
@@ -115,6 +117,7 @@ impl Agent {
             working_dir: None,
             ralph_loop: None,
             agent_type: AgentType::default(),
+            scroll_offset: 0,
         }
     }
 
@@ -134,6 +137,7 @@ impl Agent {
             working_dir: Some(working_dir),
             ralph_loop: None,
             agent_type,
+            scroll_offset: 0,
         }
     }
 
@@ -149,6 +153,29 @@ impl Agent {
         if let Ok(mut term) = self.terminal.lock() {
             term.process(data);
         }
+        // Auto-scroll to bottom when new content arrives (if not scrolled up)
+        // Only reset if we're already at the bottom
+        if self.scroll_offset == 0 {
+            // Stay at bottom - no action needed
+        }
+    }
+
+    /// Scroll up by the given number of lines
+    pub fn scroll_up(&mut self, lines: u16) {
+        if let Ok(term) = self.terminal.lock() {
+            let scrollback = term.screen().scrollback() as u16;
+            self.scroll_offset = (self.scroll_offset + lines).min(scrollback);
+        }
+    }
+
+    /// Scroll down by the given number of lines (towards bottom)
+    pub fn scroll_down(&mut self, lines: u16) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+    }
+
+    /// Reset scroll to bottom (follow output)
+    pub fn scroll_to_bottom(&mut self) {
+        self.scroll_offset = 0;
     }
 
     /// Send keyboard input to the agent's PTY

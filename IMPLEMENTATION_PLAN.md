@@ -216,27 +216,14 @@
 
 ## Phase 10: Terminal Interaction Improvements
 
-- [ ] **10.1 Implement terminal copy mode**
-  - Add `copy_mode: bool` to App state
-  - Enter copy mode with a keybinding (e.g., `[` or `y` when focused)
-  - In copy mode: arrow keys move cursor, shift+arrows select text
-  - `y` or `Enter` copies selection to clipboard
-  - `Esc` or `q` exits copy mode
-  - Use `arboard` or `clipboard` crate for clipboard access
-
-- [ ] **10.2 Add visual selection in copy mode**
-  - Track selection start/end positions
-  - Render selection with inverted colors or highlight
-  - Show "COPY MODE" indicator in terminal title
-
-- [ ] **10.3 Add mouse wheel scrolling for terminal pane**
+- [x] **10.1 Add mouse wheel scrolling for terminal pane**
   - Enable mouse capture: `crossterm::event::EnableMouseCapture`
   - When output_focused, handle `MouseEvent::ScrollUp/ScrollDown`
   - Implement scroll offset in terminal rendering
   - Track `scroll_offset` per agent
   - Scroll through vt100 scrollback buffer
 
-- [ ] **10.4 Add left pane scrolling for agent list**
+- [ ] **10.2 Add left pane scrolling for agent list**
   - Track `list_scroll_offset` in App
   - When agent count exceeds visible area, enable scrolling
   - Arrow keys (j/k) already move selection; auto-scroll to keep selected visible
@@ -265,5 +252,4 @@ All items checked. Application:
 - Can send instructions to loops
 - Persists state across restarts
 - Supports Claude instances (no prompt, no loop)
-- Has copy mode for terminal output
 - Scrollable agent list and terminal pane

@@ -9,7 +9,10 @@ use std::io;
 
 use app::App;
 use crossterm::{
-    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind},
+    event::{
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyEventKind, MouseEventKind,
+    },
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
@@ -21,12 +24,14 @@ async fn main() -> io::Result<()> {
     enable_raw_mode()?;
     io::stdout().execute(EnterAlternateScreen)?;
     io::stdout().execute(EnableBracketedPaste)?;
+    io::stdout().execute(EnableMouseCapture)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
 
     // Run the main loop
     let result = run(&mut terminal);
 
     // Cleanup terminal (always runs, even if main loop panicked)
+    io::stdout().execute(DisableMouseCapture)?;
     io::stdout().execute(DisableBracketedPaste)?;
     disable_raw_mode()?;
     io::stdout().execute(LeaveAlternateScreen)?;
@@ -55,6 +60,20 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
                 Event::Paste(text) => {
                     // Handle pasted text (preserves newlines)
                     app.handle_paste(&text);
+                }
+                Event::Mouse(mouse) => {
+                    // Handle mouse scroll events when output is focused
+                    if app.output_focused {
+                        match mouse.kind {
+                            MouseEventKind::ScrollUp => {
+                                app.scroll_terminal_up(3);
+                            }
+                            MouseEventKind::ScrollDown => {
+                                app.scroll_terminal_down(3);
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 _ => {}
             }

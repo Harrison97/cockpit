@@ -15,10 +15,11 @@
 
 | Key | Action | Description |
 |-----|--------|-------------|
-| `p` | Pause | Pause the selected agent (sends SIGSTOP) |
-| `r` | Resume | Resume the selected agent (sends SIGCONT) |
+| `r` | Run/Resume | Start if stopped, resume if paused |
+| `p` | Pause | Pause the selected agent (sends SIGSTOP) - ralph loops only |
 | `s` | Stop | Stop the selected agent (sends SIGTERM) |
-| `S` | Start | Start a stopped agent |
+
+Note: Claude instances (agents without PROMPT.md) cannot be paused.
 
 ## Loop Management
 
@@ -33,10 +34,9 @@
 
 | Key | Action | Description |
 |-----|--------|-------------|
-| `Enter` | Toggle focus | Switch focus to output pane for scrolling |
-| `Esc` | Unfocus | Return focus to agent list |
-| `Ctrl+d` | Page down | Scroll output down half page (when focused) |
-| `Ctrl+u` | Page up | Scroll output up half page (when focused) |
+| `Enter`/`Tab` | Toggle focus | Switch focus to output pane for interaction |
+| `Tab` | Unfocus | Return focus to agent list (when focused) |
+| Mouse wheel | Scroll | Scroll through terminal history (when focused) |
 
 ## Application
 
@@ -51,19 +51,33 @@
 Use crossterm's `event::read()` with `poll()` for non-blocking input:
 
 ```rust
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
 
 if event::poll(Duration::from_millis(16))? {
-    if let Event::Key(key) = event::read()? {
-        match key.code {
-            KeyCode::Char('q') => return Ok(()),
-            KeyCode::Char('j') | KeyCode::Down => app.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
-            KeyCode::Char('p') => app.pause_selected(),
-            KeyCode::Char('r') => app.resume_selected(),
-            KeyCode::Enter => app.toggle_focus(),
-            // ... etc
+    match event::read()? {
+        Event::Key(key) => {
+            match key.code {
+                KeyCode::Char('q') => return Ok(()),
+                KeyCode::Char('j') | KeyCode::Down => app.select_next(),
+                KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
+                KeyCode::Char('p') => app.pause_selected(),
+                KeyCode::Char('r') => app.run_or_resume_selected(), // Start if stopped, resume if paused
+                KeyCode::Char('s') => app.stop_selected(),
+                KeyCode::Enter | KeyCode::Tab => app.toggle_focus(),
+                // ... etc
+            }
         }
+        Event::Mouse(mouse) => {
+            // Handle mouse wheel scrolling when output focused
+            if app.output_focused {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => app.scroll_terminal_up(),
+                    MouseEventKind::ScrollDown => app.scroll_terminal_down(),
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
     }
 }
 ```
@@ -85,5 +99,5 @@ When `output_focused` is true:
 
 ### Footer Updates
 Show different keybindings based on focus state:
-- Agent list focused: "j/k: navigate  n: new  i: instruct  p: pause  s: stop  q: quit"
-- Output focused: "j/k: scroll  Esc: back  Ctrl+d/u: page  q: quit"
+- Agent list focused: "j/k: nav │ r: run │ s: stop │ p: pause │ n: new │ i: msg │ ?: help │ q: quit"
+- Output focused: "Type to interact │ Tab: back │ Scroll: mouse wheel"

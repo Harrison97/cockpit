@@ -212,6 +212,20 @@ impl App {
         self.output_focused = false;
     }
 
+    /// Scroll the selected agent's terminal up
+    pub fn scroll_terminal_up(&mut self, lines: u16) {
+        if let Some(agent) = self.selected_agent_mut() {
+            agent.scroll_up(lines);
+        }
+    }
+
+    /// Scroll the selected agent's terminal down
+    pub fn scroll_terminal_down(&mut self, lines: u16) {
+        if let Some(agent) = self.selected_agent_mut() {
+            agent.scroll_down(lines);
+        }
+    }
+
     /// Called each frame to update application state.
     /// Drains terminal data and routes to appropriate agents.
     /// Also detects when subprocesses have exited and updates agent status.

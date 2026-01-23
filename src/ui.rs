@@ -214,16 +214,20 @@ fn render_terminal_pane(
     agent: Option<&Agent>,
     output_focused: bool,
 ) {
-    let title = match agent {
+    let (title, scroll_offset) = match agent {
         Some(a) => {
             let focus_hint = if output_focused {
-                " [FOCUSED - Tab to exit]"
+                if a.scroll_offset > 0 {
+                    format!(" [SCROLLED +{} - Tab to exit]", a.scroll_offset)
+                } else {
+                    " [FOCUSED - Tab to exit]".to_string()
+                }
             } else {
-                " [Tab/Enter to focus]"
+                " [Tab/Enter to focus]".to_string()
             };
-            format!("{}{}", a.name, focus_hint)
+            (format!("{}{}", a.name, focus_hint), a.scroll_offset)
         }
-        None => "Terminal (none)".to_string(),
+        None => ("Terminal (none)".to_string(), 0),
     };
 
     let border_color = if output_focused {
@@ -262,8 +266,11 @@ fn render_terminal_pane(
         }
     };
 
-    // Get the terminal screen from the agent
-    if let Ok(term) = agent.terminal.lock() {
+    // Get the terminal screen from the agent, applying scroll offset
+    if let Ok(mut term) = agent.terminal.lock() {
+        // Set the scrollback position before getting the screen
+        // scroll_offset: 0 = bottom (current), positive = scrolled up into history
+        term.set_scrollback(scroll_offset as usize);
         let screen = term.screen();
         let pseudo_term = PseudoTerminal::new(screen);
         frame.render_widget(pseudo_term, inner_area);
@@ -306,7 +313,21 @@ fn render_header(frame: &mut Frame, area: Rect) {
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let keybindings = if app.output_focused {
-        "Type to interact │ Tab: back │ Ctrl+C: interrupt".to_string()
+        // Show scroll indicator if user has scrolled up
+        let scroll_hint = app
+            .selected_agent()
+            .map(|a| {
+                if a.scroll_offset > 0 {
+                    format!(" │ Scrolled +{}", a.scroll_offset)
+                } else {
+                    String::new()
+                }
+            })
+            .unwrap_or_default();
+        format!(
+            "Type to interact │ Tab: back │ Scroll: mouse wheel │ Ctrl+C: interrupt{}",
+            scroll_hint
+        )
     } else {
         // Show different hints based on selected agent type
         let can_pause = app.selected_agent().map(|a| a.can_pause()).unwrap_or(true);
@@ -555,6 +576,7 @@ fn render_help_screen(frame: &mut Frame) {
         Line::from("  j/k, ↑/↓    Navigate agents"),
         Line::from("  Tab/Enter   Focus terminal (type to interact)"),
         Line::from("  Tab         Unfocus terminal"),
+        Line::from("  Mouse wheel Scroll terminal (when focused)"),
         Line::from(""),
         Line::from(Span::styled(
             "Agent Control",
