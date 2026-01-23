@@ -373,17 +373,15 @@ fn render_terminal_pane(
                 }
             } else if output_focused {
                 if a.scroll_offset > 0 {
-                    format!(
-                        " [SCROLLED +{}/{} - Tab to exit]",
-                        a.scroll_offset, scrollback_size
-                    )
-                } else if scrollback_size > 0 {
-                    format!(
-                        " [FOCUSED - {} lines history - Tab to exit]",
-                        scrollback_size
-                    )
+                    // Show "Line X / Y" format when scrolled
+                    // X = current line from top (scrollback_size - scroll_offset + 1)
+                    // Y = total lines in history (scrollback_size + terminal_height)
+                    let terminal_height = a.terminal_height() as usize;
+                    let total_lines = scrollback_size + terminal_height;
+                    let current_line = scrollback_size.saturating_sub(a.scroll_offset as usize) + 1;
+                    format!(" [Line {} / {} - Tab to exit]", current_line, total_lines)
                 } else {
-                    " [FOCUSED - Tab to exit]".to_string()
+                    " [LIVE - Tab to exit]".to_string()
                 }
             } else {
                 " [Space to focus]".to_string()

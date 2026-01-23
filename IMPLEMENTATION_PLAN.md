@@ -307,7 +307,7 @@
   - Keep last 3 rotated files (30MB total max)
   - Or use a single ring buffer file
 
-- [ ] **13.5 Add scroll position indicator**
+- [x] **13.5 Add scroll position indicator**
   - Show "Line X / Y" in title when scrolled
   - Update indicator as user scrolls
   - Show "[LIVE]" when at bottom (scroll_offset = 0)
