@@ -251,7 +251,7 @@
   - Current match gets distinct highlight (cyan background)
   - Update matches as user types (incremental search)
 
-- [ ] **11.4 Add vim-style navigation in search mode**
+- [x] **11.4 Add vim-style navigation in search mode**
   - `n` = next match (scroll to show it)
   - `N` (Shift+n) = previous match
   - `j`/`k` or arrows = scroll manually line by line

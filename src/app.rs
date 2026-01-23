@@ -285,6 +285,58 @@ impl App {
         }
     }
 
+    /// Scroll the selected agent's terminal down by half a page
+    pub fn scroll_terminal_half_page_down(&mut self) {
+        if let Some(agent) = self.selected_agent_mut() {
+            let half_page = (agent.terminal_height() / 2).max(1);
+            agent.scroll_down(half_page);
+        }
+    }
+
+    /// Scroll the selected agent's terminal up by half a page
+    pub fn scroll_terminal_half_page_up(&mut self) {
+        if let Some(agent) = self.selected_agent_mut() {
+            let half_page = (agent.terminal_height() / 2).max(1);
+            agent.scroll_up(half_page);
+        }
+    }
+
+    /// Scroll the selected agent's terminal to the top of history
+    pub fn scroll_terminal_to_top(&mut self) {
+        if let Some(agent) = self.selected_agent_mut() {
+            agent.scroll_to_top();
+        }
+    }
+
+    /// Scroll the selected agent's terminal to the bottom (live output)
+    pub fn scroll_terminal_to_bottom(&mut self) {
+        if let Some(agent) = self.selected_agent_mut() {
+            agent.scroll_to_bottom();
+        }
+    }
+
+    /// Jump to the next search match
+    fn search_next_match(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        // Cycle to next match
+        self.search_current = (self.search_current + 1) % self.search_matches.len();
+    }
+
+    /// Jump to the previous search match
+    fn search_prev_match(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        // Cycle to previous match
+        if self.search_current == 0 {
+            self.search_current = self.search_matches.len() - 1;
+        } else {
+            self.search_current -= 1;
+        }
+    }
+
     /// Called each frame to update application state.
     /// Drains terminal data and routes to appropriate agents.
     /// Also detects when subprocesses have exited and updates agent status.
@@ -759,9 +811,9 @@ impl App {
     fn handle_search_key(
         &mut self,
         code: crossterm::event::KeyCode,
-        _modifiers: crossterm::event::KeyModifiers,
+        modifiers: crossterm::event::KeyModifiers,
     ) -> bool {
-        use crossterm::event::KeyCode;
+        use crossterm::event::{KeyCode, KeyModifiers};
 
         match &self.search_mode {
             SearchMode::Off => false,
@@ -805,11 +857,51 @@ impl App {
                 }
             }
             SearchMode::Navigating(_query) => {
-                // Navigation mode will be fully implemented in task 11.4
-                // For now, just handle exit keys
+                // Vim-style navigation in search mode
                 match code {
+                    // Exit search
                     KeyCode::Esc | KeyCode::Char('q') => {
                         self.exit_search_mode();
+                        true
+                    }
+                    // Next match
+                    KeyCode::Char('n') => {
+                        self.search_next_match();
+                        true
+                    }
+                    // Previous match (Shift+N)
+                    KeyCode::Char('N') => {
+                        self.search_prev_match();
+                        true
+                    }
+                    // Scroll down one line (j or Down arrow)
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        self.scroll_terminal_down(1);
+                        true
+                    }
+                    // Scroll up one line (k or Up arrow)
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        self.scroll_terminal_up(1);
+                        true
+                    }
+                    // Half-page down (Ctrl+D)
+                    KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.scroll_terminal_half_page_down();
+                        true
+                    }
+                    // Half-page up (Ctrl+U)
+                    KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.scroll_terminal_half_page_up();
+                        true
+                    }
+                    // Go to top of history
+                    KeyCode::Char('g') => {
+                        self.scroll_terminal_to_top();
+                        true
+                    }
+                    // Go to bottom of history (Shift+G)
+                    KeyCode::Char('G') => {
+                        self.scroll_terminal_to_bottom();
                         true
                     }
                     _ => false,

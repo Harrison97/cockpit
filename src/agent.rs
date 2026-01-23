@@ -277,6 +277,27 @@ impl Agent {
         self.scroll_offset = 0;
     }
 
+    /// Scroll to top of scrollback history
+    pub fn scroll_to_top(&mut self) {
+        if let Ok(mut term) = self.terminal.lock() {
+            let terminal_height = self.last_size.0 as usize;
+
+            // Get max scrollback
+            term.set_scrollback(usize::MAX);
+            let scrollback_max = term.screen().scrollback();
+
+            // Clamp to safe max (same as scroll_up)
+            let safe_max = scrollback_max.min(terminal_height.saturating_sub(1));
+            self.scroll_offset = safe_max as u16;
+            term.set_scrollback(safe_max);
+        }
+    }
+
+    /// Get the terminal height in rows
+    pub fn terminal_height(&self) -> u16 {
+        self.last_size.0
+    }
+
     /// Resize the terminal to the given dimensions (only if size changed)
     pub fn resize(&mut self, rows: u16, cols: u16) {
         if self.last_size == (rows, cols) {
