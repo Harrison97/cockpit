@@ -1,27 +1,48 @@
-# God Agent Console - Operational Guide
+# Cockpit - Ralph Loop Control System
 
 ## Project Overview
-Ratatui TUI dashboard for monitoring Ralph-style autonomous AI agents.
-Split-pane layout: agent list (left), live output (right), keybinding footer.
+
+CLI tool for creating, deploying, observing, and intervening with ralph loops.
+
+A ralph loop is a bash loop running Claude Code autonomously:
+```bash
+while :; do cat PROMPT.md | claude -p --dangerously-skip-permissions; done
+```
+
+Cockpit provides a TUI to manage multiple loops simultaneously.
 
 ## Tech Stack
+
 - Rust (edition 2021)
 - ratatui 0.29 - TUI framework
 - crossterm 0.28 - Terminal backend
-- tokio - Async runtime (for future PTY integration)
+- tokio - Async runtime for subprocess I/O
+- nix - Unix signal handling (SIGSTOP/SIGCONT/SIGTERM)
 
 ## Directory Structure
+
 ```
 /Users/harrison/dev/cockpit/
 ├── Cargo.toml
+├── PROMPT.md              # Ralph build prompt (this project builds itself)
+├── IMPLEMENTATION_PLAN.md # Task list for ralph loop
 ├── src/
-│   ├── main.rs      # App loop, event handling, entry point
-│   ├── agent.rs     # Agent struct, status enum, mock data
-│   └── ui.rs        # UI rendering components
-└── specs/           # Design specifications (reference only)
+│   ├── main.rs           # App loop, event handling, entry point
+│   ├── app.rs            # Application state management
+│   ├── agent.rs          # Agent struct, status enum
+│   ├── ui.rs             # UI rendering components
+│   ├── loop_manager.rs   # Subprocess spawning and control
+│   ├── project.rs        # Ralph project file operations
+│   └── persistence.rs    # State file and output logging
+└── specs/                # Design specifications
+    ├── tui_design.md     # Layout and visual design
+    ├── keybindings.md    # Keyboard shortcuts
+    ├── loop_manager.md   # Subprocess management spec
+    └── project.md        # Ralph project spec
 ```
 
 ## Build Commands
+
 ```bash
 # Build the project
 cargo build
@@ -36,38 +57,35 @@ cargo run
 cargo run --release
 ```
 
-## Test Commands
-```bash
-# Run all tests
-cargo test
-
-# Run tests with output
-cargo test -- --nocapture
-
-# Check for issues without building
-cargo check
-
-# Lint with clippy
-cargo clippy -- -D warnings
-
-# Format code
-cargo fmt
-```
-
 ## Quality Gates
+
 Before committing, ensure:
 1. `cargo build` succeeds
 2. `cargo clippy -- -D warnings` passes
-3. `cargo fmt --check` passes
+3. `cargo fmt` applied
 4. Application runs without panic: `cargo run`
 
-## Key Files
-- `src/main.rs`: Entry point, App struct, event loop, terminal setup/restore
-- `src/agent.rs`: Agent/AgentStatus definitions, mock data generation
-- `src/ui.rs`: All render functions (header, agent list, output, footer)
+## Running as Ralph Loop
 
-## Specifications
-Read specs/*.md for detailed requirements:
-- `specs/tui_design.md` - Layout and visual design
-- `specs/agent_model.md` - Data structures
-- `specs/keybindings.md` - Keyboard shortcuts
+This project uses its own pattern to build itself:
+
+```bash
+# Start the build loop
+while :; do cat PROMPT.md | claude -p --dangerously-skip-permissions; done
+```
+
+Each iteration picks one task from IMPLEMENTATION_PLAN.md, implements it, and exits.
+
+## Key Concepts
+
+### Ralph Loop
+A subprocess running the bash while loop with Claude. Managed by RalphLoop struct.
+
+### Ralph Project
+A directory containing PROMPT.md and optionally IMPLEMENTATION_PLAN.md, specs/, etc.
+
+### Agent
+UI representation of a ralph loop. Shows status, output, iteration count.
+
+### Intervention
+Sending instructions to a loop by writing to PRIORITY_INSTRUCTIONS.md.

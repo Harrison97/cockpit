@@ -1,127 +1,189 @@
 # Implementation Plan
 
-## Phase 1: Project Setup
+## Phase 1: Async Foundation
 
-- [x] **1.1 Initialize Cargo project**
-  - Create Cargo.toml with dependencies: ratatui 0.29, crossterm 0.28, tokio (full features)
-  - Create src/main.rs with minimal "Hello, world!" to verify setup
-  - Run `cargo build` to confirm dependencies resolve
+- [ ] **1.1 Add tokio runtime to main**
+  - Wrap main function in `#[tokio::main]`
+  - Keep existing synchronous crossterm event polling
+  - Verify app still runs correctly
 
-- [x] **1.2 Create basic terminal setup**
-  - In main.rs: enable raw mode, enter alternate screen
-  - Create Terminal with CrosstermBackend
-  - Add cleanup on exit (disable raw mode, leave alternate screen)
-  - Handle Ctrl+C gracefully
-
-## Phase 2: Data Model
-
-- [x] **2.1 Create agent.rs with AgentStatus enum**
-  - Define AgentStatus: Running, Stopped, Paused
-  - Implement Display trait for status text
-  - Add method to get status color (for UI)
-
-- [x] **2.2 Create Agent struct**
-  - Fields: name, status, start_time (Option<Instant>), output (Vec<String>), iteration
-  - Implement new(), uptime_secs(), add_output()
-  - Implement start(), stop(), pause(), resume() methods
-
-- [x] **2.3 Add mock data generation**
-  - Create ALPHA_OUTPUTS and GAMMA_OUTPUTS constants with sample log lines
-  - Create create_mock_agents() function returning 3 agents
-  - Alpha: Running with initial output, Gamma: Running, Beta: Stopped
-
-## Phase 3: UI Components
-
-- [x] **3.1 Create ui.rs module structure**
-  - Create src/ui.rs file
+- [ ] **1.2 Create loop_manager module**
+  - Create `src/loop_manager.rs`
   - Add module declaration in main.rs
-  - Define render function signature that takes frame and app state
+  - Define empty `RalphLoop` struct placeholder
 
-- [x] **3.2 Implement main layout**
-  - Create vertical layout: header (3), main (flex), footer (1)
-  - Create horizontal split for main: left (20%), right (80%)
-  - Use Constraint::Percentage and Constraint::Length
+- [ ] **1.3 Create project module**
+  - Create `src/project.rs`
+  - Add module declaration in main.rs
+  - Define empty `RalphProject` struct placeholder
 
-- [x] **3.3 Implement header rendering**
-  - Block with title "GOD AGENT CONSOLE" (cyan, bold)
-  - Right-aligned timestamp showing current time HH:MM:SS
-  - Bottom border only
+- [ ] **1.4 Add new dependencies**
+  - Add to Cargo.toml: `nix = { version = "0.29", features = ["signal", "process"] }`
+  - Add: `serde = { version = "1", features = ["derive"] }`
+  - Add: `serde_json = "1"`
+  - Add: `directories = "5"`
+  - Run `cargo build` to verify
 
-- [x] **3.4 Implement agent list rendering**
-  - Block with title "AGENTS" and full border
-  - List each agent with: arrow (if selected), name, status dot, uptime, loop count
-  - Highlight selected agent with cyan background
-  - Status colors: green=running, red=stopped, yellow=paused
+- [ ] **1.5 Implement output channel**
+  - Create `tokio::sync::mpsc` channel in App
+  - Store sender in App for subprocess use
+  - Modify tick() to drain receiver into agent output buffers
 
-- [x] **3.5 Implement output pane rendering**
-  - Block with title "Agent Output: {name}" and full border
-  - Display output lines from selected agent
-  - Each line prefixed with timestamp
-  - Support scrolling (track scroll offset)
+## Phase 2: Subprocess Management
 
-- [x] **3.6 Implement footer rendering**
-  - Single line with keybinding hints
-  - Format: "j/k: navigate  Enter: focus  p: pause  r: resume  q: quit"
-  - Dim styling
+- [ ] **2.1 Implement RalphLoop struct**
+  - Fields: project_path, child (Option<Child>), pid (Option<u32>)
+  - Method: `new(project_path: PathBuf) -> Self`
+  - Method: `is_running(&self) -> bool`
 
-## Phase 4: App State and Event Loop
+- [ ] **2.2 Implement subprocess spawning**
+  - Method: `start(&mut self, tx: mpsc::Sender<OutputLine>) -> Result<()>`
+  - Spawn bash with: `cd {path} && while :; do cat PROMPT.md | claude -p --dangerously-skip-permissions 2>&1; sleep 1; done`
+  - Configure stdout pipe for capture
+  - Store Child handle and PID
 
-- [x] **4.1 Create App struct**
-  - Fields: agents, selected_index, scroll_offset, output_focused, running
-  - Implement new() initializing with mock agents
-  - Implement select_next(), select_prev(), selected_agent()
+- [ ] **2.3 Implement async output reader**
+  - Spawn tokio task to read stdout lines
+  - Send lines to mpsc channel with timestamp
+  - Handle process exit gracefully
 
-- [x] **4.2 Implement main event loop**
-  - Poll for events with 16ms timeout (60 FPS)
-  - On tick: update mock agent output (if running)
-  - On key event: dispatch to handlers
-  - On quit: set running = false
+- [ ] **2.4 Implement stop**
+  - Method: `stop(&mut self) -> Result<()>`
+  - Send SIGTERM to process
+  - Wait for cleanup with timeout
+  - Clear child handle
 
-- [x] **4.3 Implement navigation keybindings**
-  - j/Down: select next agent
-  - k/Up: select previous agent
-  - g: select first agent
-  - G: select last agent
+- [ ] **2.5 Connect RalphLoop to Agent**
+  - Add `ralph_loop: Option<RalphLoop>` field to Agent
+  - Modify Agent::start() to spawn real subprocess
+  - Modify Agent::stop() to kill subprocess
+  - Remove mock output generation
 
-- [x] **4.4 Implement agent control keybindings**
-  - p: pause selected agent
-  - r: resume selected agent
-  - s: stop selected agent
+## Phase 3: Ralph Project Structure
 
-- [x] **4.5 Implement output focus keybindings**
-  - Enter: toggle output_focused
-  - When focused: j/k scroll output, Esc unfocuses
-  - Visual indicator when focused (brighter border)
+- [ ] **3.1 Implement RalphProject struct**
+  - Fields: root, prompt_path, plan_path, specs_dir
+  - Method: `from_path(path: PathBuf) -> Result<Self>`
+  - Validate required files exist (PROMPT.md)
 
-- [x] **4.6 Implement quit keybindings**
-  - q: quit application
-  - Ctrl+C: quit application
+- [ ] **3.2 Implement project detection**
+  - Method: `is_ralph_project(path: &Path) -> bool`
+  - Check for PROMPT.md existence
+  - Optionally check for IMPLEMENTATION_PLAN.md
 
-## Phase 5: Polish
+- [ ] **3.3 Implement project creation**
+  - Method: `create(path: PathBuf, prompt_content: &str) -> Result<Self>`
+  - Create directory structure
+  - Write PROMPT.md with user content
+  - Create empty IMPLEMENTATION_PLAN.md
+  - Create specs/ directory
 
-- [x] **5.1 Add mock output generation**
-  - Running agents periodically add new output lines
-  - Random interval 2-5 seconds between lines
-  - Cycle through predefined output messages
-  - Increment iteration counter every ~10 messages
+- [ ] **3.4 Add create loop UI**
+  - Add keybinding `n` for new loop
+  - Prompt for project path
+  - Prompt for prompt content (or use default)
+  - Create project and add to agent list
 
-- [x] **5.2 Add auto-scroll behavior**
-  - When new output added, auto-scroll to bottom
-  - Only if user hasn't manually scrolled up
-  - Track "pinned to bottom" state
+## Phase 4: Pause/Resume with Signals
 
-- [x] **5.3 Final visual polish**
-  - Ensure consistent colors per spec
-  - Rounded borders everywhere
-  - Proper spacing between elements
-  - Test at various terminal sizes
+- [ ] **4.1 Spawn with process groups**
+  - Use `Command::process_group(0)` or pre_exec with setsid
+  - Store process group ID
+  - Signals will target entire group
+
+- [ ] **4.2 Implement pause**
+  - Method: `pause(&mut self) -> Result<()>`
+  - Send SIGSTOP to process group
+  - Update status to Paused
+
+- [ ] **4.3 Implement resume**
+  - Method: `resume(&mut self) -> Result<()>`
+  - Send SIGCONT to process group
+  - Update status to Running
+
+- [ ] **4.4 Wire up keybindings**
+  - `p` calls ralph_loop.pause() then updates agent status
+  - `r` calls ralph_loop.resume() then updates agent status
+  - Handle errors gracefully
+
+## Phase 5: Instructions/Intervention
+
+- [ ] **5.1 Implement instruction appending**
+  - Method: `RalphProject::append_instruction(text: &str) -> Result<()>`
+  - Create/append to PRIORITY_INSTRUCTIONS.md
+  - File will be read by next Claude iteration
+
+- [ ] **5.2 Add instruction UI**
+  - Add keybinding `i` for instruct
+  - Simple line input at bottom of screen
+  - Write to project's instruction file
+  - Show confirmation message
+
+- [ ] **5.3 Implement plan modification**
+  - Method: `RalphProject::prepend_task(task: &str) -> Result<()>`
+  - Add task to top of IMPLEMENTATION_PLAN.md
+  - Useful for priority overrides
+
+## Phase 6: Persistence
+
+- [ ] **6.1 Create persistence module**
+  - Create `src/persistence.rs`
+  - Define state file path: `~/.cockpit/state.json`
+  - Define log directory: `~/.cockpit/logs/`
+
+- [ ] **6.2 Implement state saving**
+  - Struct: `PersistedState { loops: Vec<LoopState> }`
+  - Struct: `LoopState { name, project_path, last_iteration }`
+  - Save on loop creation and status changes
+
+- [ ] **6.3 Implement state loading**
+  - Load state file on startup
+  - Recreate agents from persisted state
+  - All start as Stopped (user must restart)
+
+- [ ] **6.4 Implement output logging**
+  - Write output to `~/.cockpit/logs/{agent_name}.log`
+  - Append mode, include timestamps
+  - Load recent history on restart
+
+## Phase 7: Iteration Detection
+
+- [ ] **7.1 Parse output for boundaries**
+  - Detect patterns like "feat:" commit messages
+  - Detect "I'm done with" exit messages
+  - Track iteration boundaries
+
+- [ ] **7.2 Update iteration counter**
+  - Increment agent.iteration on detected boundary
+  - Update UI to show real count
+
+- [ ] **7.3 Add visual separators**
+  - Insert separator line between iterations in output
+  - Style: dim line with iteration number
+
+## Phase 8: Polish
+
+- [ ] **8.1 Error handling**
+  - Show user-friendly error messages
+  - Handle spawn failures gracefully
+  - Retry logic for transient failures
+
+- [ ] **8.2 Resource cleanup**
+  - Kill all subprocesses on cockpit exit
+  - Clean up zombie processes
+  - Save state before exit
+
+- [ ] **8.3 UI enhancements**
+  - Show PID in agent info
+  - Add help screen with `?`
+  - Show loop project path
 
 ## Completion Criteria
 
 All items checked. Application:
 - Builds without warnings (`cargo clippy`)
-- Runs without panics
-- Displays correct layout matching spec
-- All keybindings work
-- Mock agents update in real-time
-- Smooth 60fps rendering
+- Can create new ralph projects
+- Can start/stop/pause/resume real loops
+- Shows real Claude output
+- Can send instructions to loops
+- Persists state across restarts

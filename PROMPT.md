@@ -1,6 +1,15 @@
-# God Agent Console - Build Prompt
+# Cockpit - Ralph Loop Control System
 
-You are building a Ratatui TUI dashboard called "God Agent Console" for monitoring autonomous AI agents.
+You are building a CLI tool called "Cockpit" for creating, deploying, observing, and intervening with ralph loops (autonomous Claude Code agents).
+
+## What is a Ralph Loop?
+
+A ralph loop is a bash loop that continuously runs Claude Code:
+```bash
+while :; do cat PROMPT.md | claude -p --dangerously-skip-permissions; done
+```
+
+Each iteration: Claude reads the prompt, picks a task from IMPLEMENTATION_PLAN.md, implements it, commits, and exits. The loop restarts with fresh context.
 
 ## Your Task
 
@@ -21,8 +30,9 @@ You are building a Ratatui TUI dashboard called "God Agent Console" for monitori
 
 4. **Follow the specs.** Read the specification files in `specs/` for exact requirements:
     - `specs/tui_design.md` - Layout, colors, visual design
-    - `specs/agent_model.md` - Data structures, mock data
     - `specs/keybindings.md` - Keyboard shortcuts
+    - `specs/loop_manager.md` - Subprocess management
+    - `specs/project.md` - Ralph project file operations
 
 5. **Keep it simple.** Implement exactly what's specified. No extra features.
 
@@ -38,9 +48,7 @@ You are building a Ratatui TUI dashboard called "God Agent Console" for monitori
 ## Reference Files
 
 - `@AGENTS.md` - Build commands and project structure
-- `@specs/tui_design.md` - Visual layout specification
-- `@specs/agent_model.md` - Agent struct and mock data
-- `@specs/keybindings.md` - Keybinding specification
+- `@specs/` - All specification files
 
 ## Quality Checklist Before Commit
 

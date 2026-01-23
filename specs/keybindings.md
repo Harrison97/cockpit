@@ -15,9 +15,19 @@
 
 | Key | Action | Description |
 |-----|--------|-------------|
-| `p` | Pause | Pause the selected agent (if running) |
-| `r` | Resume | Resume the selected agent (if paused) |
-| `s` | Stop | Stop the selected agent completely |
+| `p` | Pause | Pause the selected agent (sends SIGSTOP) |
+| `r` | Resume | Resume the selected agent (sends SIGCONT) |
+| `s` | Stop | Stop the selected agent (sends SIGTERM) |
+| `S` | Start | Start a stopped agent |
+
+## Loop Management
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `n` | New loop | Create a new ralph loop project |
+| `i` | Instruct | Send instruction to selected loop |
+| `d` | Delete | Remove loop from cockpit (doesn't delete files) |
+| `o` | Open | Open loop project in file manager |
 
 ## Output Pane
 
@@ -75,5 +85,5 @@ When `output_focused` is true:
 
 ### Footer Updates
 Show different keybindings based on focus state:
-- Agent list focused: "j/k: navigate  Enter: focus  p: pause  r: resume  q: quit"
+- Agent list focused: "j/k: navigate  n: new  i: instruct  p: pause  s: stop  q: quit"
 - Output focused: "j/k: scroll  Esc: back  Ctrl+d/u: page  q: quit"
