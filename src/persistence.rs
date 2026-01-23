@@ -90,7 +90,12 @@ pub fn save_state(state: &PersistedState) -> io::Result<()> {
         )
     })?;
 
-    fs::write(&state_path, json)?;
+    // Atomic write: write to temp file, then rename
+    // This prevents corruption if the process is interrupted during write
+    let temp_path = state_path.with_extension("json.tmp");
+    fs::write(&temp_path, &json)?;
+    fs::rename(&temp_path, &state_path)?;
+
     Ok(())
 }
 
