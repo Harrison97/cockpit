@@ -53,7 +53,7 @@
   - Wait for cleanup with timeout
   - Clear child handle
 
-- [ ] **2.5 Connect RalphLoop to Agent**
+- [x] **2.5 Connect RalphLoop to Agent**
   - Add `ralph_loop: Option<RalphLoop>` field to Agent
   - Modify Agent::start() to spawn real subprocess
   - Modify Agent::stop() to kill subprocess

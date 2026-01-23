@@ -4,7 +4,7 @@
 
 #![allow(dead_code)] // Methods will be used as more features are implemented
 
-use crate::agent::{create_mock_agents, Agent, AgentStatus};
+use crate::agent::{create_demo_agents, Agent, AgentStatus};
 use crate::loop_manager::OutputLine;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -38,9 +38,9 @@ pub struct App {
 }
 
 impl App {
-    /// Creates a new App with mock agents
+    /// Creates a new App with demo agents
     pub fn new() -> Self {
-        let agents = create_mock_agents();
+        let agents = create_demo_agents();
         let (output_tx, output_rx) = mpsc::channel(OUTPUT_CHANNEL_SIZE);
         Self {
             agents,
@@ -138,10 +138,30 @@ impl App {
         }
     }
 
+    /// Starts the currently selected agent (if stopped)
+    pub fn start_selected(&mut self) {
+        let tx = self.output_tx.clone();
+        if let Some(agent) = self.selected_agent_mut() {
+            if agent.status == AgentStatus::Stopped {
+                // Ignore errors for now - will be properly handled later
+                let _ = agent.start(tx);
+            }
+        }
+    }
+
     /// Stops the currently selected agent
+    ///
+    /// Uses block_in_place to run the async stop operation from synchronous context.
     pub fn stop_selected(&mut self) {
         if let Some(agent) = self.selected_agent_mut() {
-            agent.stop();
+            if agent.status != AgentStatus::Stopped {
+                // Run the async stop in a blocking context
+                // This is safe because we're in a tokio runtime
+                tokio::task::block_in_place(|| {
+                    let rt = tokio::runtime::Handle::current();
+                    let _ = rt.block_on(agent.stop());
+                });
+            }
         }
     }
 
@@ -222,7 +242,6 @@ impl App {
     /// Called each frame to update application state
     ///
     /// Drains the output channel and routes lines to the appropriate agents.
-    /// Also updates running agents' mock output at randomized intervals (2-5 seconds per agent).
     /// Auto-scrolls to bottom when new output is added if pinned_to_bottom is true.
     pub fn tick(&mut self) {
         self.frame_count += 1;
@@ -244,14 +263,6 @@ impl App {
                 .find(|a| a.name == output_line.agent_name)
             {
                 agent.add_output(&output_line.line);
-            }
-        }
-
-        // Check each agent for output updates (each has its own random timer)
-        // This is mock output that will be removed when real subprocess output is implemented
-        for agent in &mut self.agents {
-            if agent.is_output_due() {
-                agent.add_next_mock_output();
             }
         }
 
@@ -342,6 +353,10 @@ impl App {
                     true
                 }
                 // Agent control keybindings
+                KeyCode::Char('S') => {
+                    self.start_selected();
+                    true
+                }
                 KeyCode::Char('p') => {
                     self.pause_selected();
                     true

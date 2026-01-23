@@ -4,38 +4,12 @@
 
 #![allow(dead_code)] // Items will be used as more features are implemented
 
-use rand::Rng;
+use crate::loop_manager::{OutputLine, RalphLoop};
 use ratatui::style::Color;
 use std::fmt;
-use std::time::{Duration, Instant};
-
-/// Mock output lines for the Alpha agent (AI research theme)
-pub const ALPHA_OUTPUTS: &[&str] = &[
-    "Starting analysis loop...",
-    "Loading market data from cache",
-    "Analyzing RSI divergence patterns",
-    "Found 3 potential signals",
-    "Backtesting strategy_v12...",
-    "Results: Sharpe 2.1, MaxDD -12%, Win 64%",
-    "Generating improved strategy",
-    "Writing src/strategies/momentum_v13.rs",
-    "Running cargo test...",
-    "All tests passed (23/23)",
-    "Committing changes...",
-    "Iteration complete. Exiting.",
-];
-
-/// Mock output lines for the Gamma agent (data processing theme)
-pub const GAMMA_OUTPUTS: &[&str] = &[
-    "Initializing data pipeline",
-    "Fetching datasets from S3",
-    "Processing batch 1/10",
-    "Applying transformations",
-    "Validating schema integrity",
-    "Writing to parquet: data/processed/batch_001.parquet",
-    "Updating metadata index",
-    "Pipeline complete. 1.2GB processed.",
-];
+use std::path::PathBuf;
+use std::time::Instant;
+use tokio::sync::mpsc;
 
 /// Status of an AI agent
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -73,12 +47,10 @@ pub struct Agent {
     pub start_time: Option<Instant>,
     pub output: Vec<String>,
     pub iteration: u32,
-    /// Index tracking which mock output line to add next
-    pub mock_output_index: usize,
-    /// Count of output lines since last iteration increment
-    pub lines_since_iteration: u32,
-    /// When to next add mock output (for randomized intervals)
-    pub next_output_at: Instant,
+    /// Path to the ralph project directory (if this agent runs a real ralph loop)
+    pub project_path: Option<PathBuf>,
+    /// The ralph loop subprocess manager (if running a real loop)
+    pub ralph_loop: Option<RalphLoop>,
 }
 
 impl Agent {
@@ -92,26 +64,24 @@ impl Agent {
             start_time: None,
             output: Vec::new(),
             iteration: 0,
-            mock_output_index: 0,
-            lines_since_iteration: 0,
-            next_output_at: Instant::now(),
+            project_path: None,
+            ralph_loop: None,
         }
     }
 
-    /// Generates a random delay between 2-5 seconds
-    fn random_output_delay() -> Duration {
-        let mut rng = rand::thread_rng();
-        Duration::from_millis(rng.gen_range(2000..=5000))
-    }
-
-    /// Schedules the next output at a random time 2-5 seconds from now
-    pub fn schedule_next_output(&mut self) {
-        self.next_output_at = Instant::now() + Self::random_output_delay();
-    }
-
-    /// Returns true if it's time to add the next output line
-    pub fn is_output_due(&self) -> bool {
-        self.status == AgentStatus::Running && Instant::now() >= self.next_output_at
+    /// Creates a new agent with a ralph project path
+    ///
+    /// This agent will run a real ralph loop subprocess when started.
+    pub fn with_project(name: &str, project_path: PathBuf) -> Self {
+        Self {
+            name: name.to_string(),
+            status: AgentStatus::Stopped,
+            start_time: None,
+            output: Vec::new(),
+            iteration: 0,
+            project_path: Some(project_path),
+            ralph_loop: None,
+        }
     }
 
     /// Returns the uptime in seconds, or 0 if the agent has no start time
@@ -127,17 +97,42 @@ impl Agent {
         self.output.push(line.to_string());
     }
 
-    /// Starts the agent, setting status to Running and recording start time
-    pub fn start(&mut self) {
+    /// Starts the agent, spawning a real ralph loop subprocess if a project path is configured.
+    ///
+    /// If no project_path is set, only updates the status (legacy behavior).
+    pub fn start(
+        &mut self,
+        tx: mpsc::Sender<OutputLine>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if self.status == AgentStatus::Running {
+            return Ok(()); // Already running
+        }
+
+        // If we have a project path, spawn the real subprocess
+        if let Some(ref project_path) = self.project_path {
+            let mut ralph_loop = RalphLoop::new(project_path.clone());
+            ralph_loop.start(self.name.clone(), tx)?;
+            self.ralph_loop = Some(ralph_loop);
+        }
+
         self.status = AgentStatus::Running;
         self.start_time = Some(Instant::now());
-        self.schedule_next_output();
+        Ok(())
     }
 
-    /// Stops the agent, setting status to Stopped and clearing start time
-    pub fn stop(&mut self) {
+    /// Stops the agent, killing the subprocess if running.
+    ///
+    /// This is an async method because stopping the subprocess requires waiting.
+    pub async fn stop(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Stop the ralph loop subprocess if we have one
+        if let Some(ref mut ralph_loop) = self.ralph_loop {
+            ralph_loop.stop().await?;
+        }
+        self.ralph_loop = None;
+
         self.status = AgentStatus::Stopped;
         self.start_time = None;
+        Ok(())
     }
 
     /// Pauses the agent, setting status to Paused (keeps start time for uptime tracking)
@@ -152,72 +147,21 @@ impl Agent {
         }
     }
 
-    /// Returns the mock output lines for this agent based on its name
-    fn mock_outputs(&self) -> &'static [&'static str] {
-        match self.name.as_str() {
-            "alpha" => ALPHA_OUTPUTS,
-            "gamma" => GAMMA_OUTPUTS,
-            // Default to alpha outputs for unknown agents
-            _ => ALPHA_OUTPUTS,
-        }
+    /// Returns true if this agent has a real ralph loop configured
+    pub fn has_project(&self) -> bool {
+        self.project_path.is_some()
     }
 
-    /// Adds the next mock output line, cycling through the output list
-    ///
-    /// Increments the iteration counter every ~10 lines.
-    /// Schedules the next output at a random interval 2-5 seconds from now.
-    pub fn add_next_mock_output(&mut self) {
-        let outputs = self.mock_outputs();
-        if outputs.is_empty() {
-            return;
-        }
-
-        // Get the next output line (cycling)
-        let line = outputs[self.mock_output_index % outputs.len()];
-        self.add_output(line);
-        self.mock_output_index += 1;
-
-        // Track lines and increment iteration every ~10 lines
-        self.lines_since_iteration += 1;
-        if self.lines_since_iteration >= 10 {
-            self.iteration += 1;
-            self.lines_since_iteration = 0;
-        }
-
-        // Schedule the next output
-        self.schedule_next_output();
+    /// Returns true if the ralph loop subprocess is running
+    pub fn is_subprocess_running(&self) -> bool {
+        self.ralph_loop.as_ref().is_some_and(|rl| rl.is_running())
     }
 }
 
-/// Creates mock agents for demonstration purposes
+/// Creates demo agents for demonstration purposes
 ///
-/// Returns 3 agents:
-/// - alpha: Running with initial research-themed output
-/// - beta: Stopped with empty output
-/// - gamma: Running with data processing output
-pub fn create_mock_agents() -> Vec<Agent> {
-    let mut alpha = Agent::new("alpha");
-    alpha.start();
-    alpha.iteration = 1;
-    // Add initial output lines for alpha
-    for line in ALPHA_OUTPUTS.iter().take(4) {
-        alpha.add_output(line);
-    }
-    alpha.mock_output_index = 4; // Next line to add
-    alpha.lines_since_iteration = 4; // Track initial lines
-
-    let beta = Agent::new("beta");
-    // beta stays Stopped with no output
-
-    let mut gamma = Agent::new("gamma");
-    gamma.start();
-    gamma.iteration = 1;
-    // Add initial output lines for gamma
-    for line in GAMMA_OUTPUTS.iter().take(3) {
-        gamma.add_output(line);
-    }
-    gamma.mock_output_index = 3; // Next line to add
-    gamma.lines_since_iteration = 3; // Track initial lines
-
-    vec![alpha, beta, gamma]
+/// Returns 3 stopped agents (no project paths configured yet).
+/// To use real subprocesses, create agents with Agent::with_project().
+pub fn create_demo_agents() -> Vec<Agent> {
+    vec![Agent::new("alpha"), Agent::new("beta"), Agent::new("gamma")]
 }
