@@ -47,7 +47,7 @@
   - Right-aligned timestamp showing current time HH:MM:SS
   - Bottom border only
 
-- [ ] **3.4 Implement agent list rendering**
+- [x] **3.4 Implement agent list rendering**
   - Block with title "AGENTS" and full border
   - List each agent with: arrow (if selected), name, status dot, uptime, loop count
   - Highlight selected agent with cyan background

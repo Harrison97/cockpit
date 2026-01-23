@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, BorderType, Borders, Paragraph},
     Frame,
 };
 
@@ -44,6 +44,138 @@ fn create_content_layout(area: Rect) -> (Rect, Rect) {
         .split(area);
 
     (chunks[0], chunks[1])
+}
+
+/// Renders the agent list in the left pane
+///
+/// Shows each agent with:
+/// - Line 1: Arrow (if selected) + name
+/// - Line 2: Status dot + status text
+/// - Line 3: Uptime
+/// - Line 4: Loop count (only for running/paused agents)
+/// - Blank line between agents
+fn render_agent_list(frame: &mut Frame, area: Rect, agents: &[Agent], selected_index: usize) {
+    let block = Block::default()
+        .title("AGENTS")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let inner_area = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Build lines for each agent
+    let mut lines: Vec<Line> = Vec::new();
+
+    for (i, agent) in agents.iter().enumerate() {
+        let is_selected = i == selected_index;
+
+        // Line 1: Arrow (if selected) + name
+        let arrow = if is_selected { "→ " } else { "  " };
+        let name_style = if is_selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let arrow_style = if is_selected {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+
+        // Build the name line - pad to fill width for selected highlight
+        let name_content = format!("{}{}", arrow, agent.name);
+        let padded_name = if is_selected {
+            format!("{:width$}", name_content, width = inner_area.width as usize)
+        } else {
+            name_content
+        };
+
+        if is_selected {
+            lines.push(Line::from(Span::styled(padded_name, name_style)));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(arrow, arrow_style),
+                Span::styled(&agent.name, name_style),
+            ]));
+        }
+
+        // Line 2: Status dot + status text
+        let status_dot = match agent.status {
+            crate::agent::AgentStatus::Stopped => "○",
+            _ => "●",
+        };
+        let status_color = agent.status.color();
+        let status_style = if is_selected {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default().fg(status_color)
+        };
+        let status_text_style = if is_selected {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default().fg(status_color)
+        };
+
+        let status_line_content = format!("  {} {}", status_dot, agent.status);
+        if is_selected {
+            let padded_status = format!(
+                "{:width$}",
+                status_line_content,
+                width = inner_area.width as usize
+            );
+            lines.push(Line::from(Span::styled(padded_status, status_style)));
+        } else {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(status_dot, status_style),
+                Span::styled(format!(" {}", agent.status), status_text_style),
+            ]));
+        }
+
+        // Line 3: Uptime
+        let uptime_text = format!("  Uptime: {}s", agent.uptime_secs());
+        let uptime_style = if is_selected {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        if is_selected {
+            let padded_uptime =
+                format!("{:width$}", uptime_text, width = inner_area.width as usize);
+            lines.push(Line::from(Span::styled(padded_uptime, uptime_style)));
+        } else {
+            lines.push(Line::from(Span::styled(uptime_text, uptime_style)));
+        }
+
+        // Line 4: Loop count (for running or paused agents)
+        if agent.status != crate::agent::AgentStatus::Stopped {
+            let loop_text = format!("  Loop #{}", agent.iteration);
+            let loop_style = if is_selected {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            if is_selected {
+                let padded_loop =
+                    format!("{:width$}", loop_text, width = inner_area.width as usize);
+                lines.push(Line::from(Span::styled(padded_loop, loop_style)));
+            } else {
+                lines.push(Line::from(Span::styled(loop_text, loop_style)));
+            }
+        }
+
+        // Blank line between agents (but not after the last one)
+        if i < agents.len() - 1 {
+            lines.push(Line::from(""));
+        }
+    }
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner_area);
 }
 
 /// Renders the header with title and timestamp
@@ -109,18 +241,12 @@ pub fn render(
     // Render header
     render_header(frame, header_area);
 
-    // TODO: Render agent list (task 3.4)
+    // Render agent list
+    render_agent_list(frame, agent_list_area, agents, selected_index);
+
     // TODO: Render output pane (task 3.5)
     // TODO: Render footer (task 3.6)
 
     // Suppress unused variable warnings for now
-    let _ = (
-        agent_list_area,
-        output_area,
-        footer_area,
-        agents,
-        selected_index,
-        scroll_offset,
-        output_focused,
-    );
+    let _ = (output_area, footer_area, scroll_offset, output_focused);
 }
