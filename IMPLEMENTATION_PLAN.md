@@ -88,7 +88,7 @@
   - r: resume selected agent
   - s: stop selected agent
 
-- [ ] **4.5 Implement output focus keybindings**
+- [x] **4.5 Implement output focus keybindings**
   - Enter: toggle output_focused
   - When focused: j/k scroll output, Esc unfocuses
   - Visual indicator when focused (brighter border)

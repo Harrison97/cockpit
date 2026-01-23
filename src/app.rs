@@ -125,6 +125,64 @@ impl App {
         }
     }
 
+    /// Toggles focus between agent list and output pane
+    pub fn toggle_focus(&mut self) {
+        self.output_focused = !self.output_focused;
+        // Reset scroll offset when focusing output pane
+        if self.output_focused {
+            // Scroll to bottom when entering focus
+            self.scroll_to_bottom();
+        }
+    }
+
+    /// Unfocuses the output pane, returning to agent list
+    pub fn unfocus_output(&mut self) {
+        self.output_focused = false;
+    }
+
+    /// Scrolls the output pane up by one line
+    pub fn scroll_up(&mut self) {
+        if self.scroll_offset > 0 {
+            self.scroll_offset -= 1;
+        }
+    }
+
+    /// Scrolls the output pane down by one line
+    pub fn scroll_down(&mut self) {
+        // Get max scroll based on selected agent's output length
+        if let Some(agent) = self.selected_agent() {
+            let output_len = agent.output.len();
+            // Allow scrolling down but will be clamped in UI
+            if self.scroll_offset < output_len {
+                self.scroll_offset += 1;
+            }
+        }
+    }
+
+    /// Scrolls the output pane up by half a page (approximately)
+    pub fn page_up(&mut self) {
+        // Scroll up by 10 lines (approximate half page)
+        self.scroll_offset = self.scroll_offset.saturating_sub(10);
+    }
+
+    /// Scrolls the output pane down by half a page (approximately)
+    pub fn page_down(&mut self) {
+        // Get max scroll based on selected agent's output length
+        if let Some(agent) = self.selected_agent() {
+            let output_len = agent.output.len();
+            self.scroll_offset = (self.scroll_offset + 10).min(output_len);
+        }
+    }
+
+    /// Scrolls to the bottom of the output
+    fn scroll_to_bottom(&mut self) {
+        if let Some(agent) = self.selected_agent() {
+            // Set scroll offset to show last lines
+            // The actual clamping happens in the UI based on visible height
+            self.scroll_offset = agent.output.len();
+        }
+    }
+
     /// Called each frame to update application state
     ///
     /// Updates running agents' mock output periodically (every ~2 seconds)
@@ -154,48 +212,85 @@ impl App {
         code: crossterm::event::KeyCode,
         modifiers: crossterm::event::KeyModifiers,
     ) -> bool {
-        use crossterm::event::KeyCode;
+        use crossterm::event::{KeyCode, KeyModifiers};
 
+        // Global keybindings (work regardless of focus state)
         match code {
             KeyCode::Char('q') => {
                 self.running = false;
-                true
+                return true;
             }
-            KeyCode::Char('c') if modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+            KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
                 self.running = false;
-                true
+                return true;
             }
-            // Navigation keybindings
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.select_next();
-                true
+            KeyCode::Enter => {
+                self.toggle_focus();
+                return true;
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.select_prev();
-                true
+            _ => {}
+        }
+
+        // Focus-dependent keybindings
+        if self.output_focused {
+            // Output pane is focused: j/k scroll, Esc unfocuses, Ctrl+d/u page scroll
+            match code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.scroll_down();
+                    true
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.scroll_up();
+                    true
+                }
+                KeyCode::Esc => {
+                    self.unfocus_output();
+                    true
+                }
+                KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.page_down();
+                    true
+                }
+                KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.page_up();
+                    true
+                }
+                _ => false,
             }
-            KeyCode::Char('g') => {
-                self.select_first();
-                true
+        } else {
+            // Agent list is focused: navigation and control keybindings
+            match code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.select_next();
+                    true
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.select_prev();
+                    true
+                }
+                KeyCode::Char('g') => {
+                    self.select_first();
+                    true
+                }
+                KeyCode::Char('G') => {
+                    self.select_last();
+                    true
+                }
+                // Agent control keybindings
+                KeyCode::Char('p') => {
+                    self.pause_selected();
+                    true
+                }
+                KeyCode::Char('r') => {
+                    self.resume_selected();
+                    true
+                }
+                KeyCode::Char('s') => {
+                    self.stop_selected();
+                    true
+                }
+                _ => false,
             }
-            KeyCode::Char('G') => {
-                self.select_last();
-                true
-            }
-            // Agent control keybindings
-            KeyCode::Char('p') => {
-                self.pause_selected();
-                true
-            }
-            KeyCode::Char('r') => {
-                self.resume_selected();
-                true
-            }
-            KeyCode::Char('s') => {
-                self.stop_selected();
-                true
-            }
-            _ => false,
         }
     }
 }
