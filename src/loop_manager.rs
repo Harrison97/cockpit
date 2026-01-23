@@ -1,8 +1,10 @@
 use nix::libc;
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
+use regex::Regex;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -32,6 +34,174 @@ impl OutputLine {
             line,
             timestamp: Instant::now(),
         }
+    }
+}
+
+/// Result of checking a line for iteration boundary markers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IterationBoundary {
+    /// Line indicates a new iteration completed (e.g., commit message like "feat:")
+    Completed,
+    /// Line indicates the agent is done and exiting (e.g., "I'm done with...")
+    Done,
+    /// Line does not indicate an iteration boundary
+    None,
+}
+
+/// Detects iteration boundaries in ralph loop output.
+///
+/// Recognizes two types of boundaries:
+/// 1. Commit messages (conventional commit format: feat:, fix:, etc.)
+/// 2. Exit messages ("I'm done with" pattern)
+pub struct IterationDetector {
+    /// Regex for conventional commit message patterns
+    commit_pattern: &'static Regex,
+    /// Regex for "I'm done with" exit messages
+    done_pattern: &'static Regex,
+}
+
+/// Static regex for conventional commit patterns (feat:, fix:, refactor:, etc.)
+static COMMIT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*(feat|fix|refactor|chore|docs|test|style|perf|ci|build|revert)(\(.+\))?:\s*.+")
+        .expect("commit regex should be valid")
+});
+
+/// Static regex for "I'm done with" exit messages
+static DONE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)I'm done with").expect("done regex should be valid"));
+
+impl Default for IterationDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl IterationDetector {
+    /// Create a new IterationDetector with default patterns.
+    pub fn new() -> Self {
+        Self {
+            commit_pattern: &COMMIT_REGEX,
+            done_pattern: &DONE_REGEX,
+        }
+    }
+
+    /// Check if a line indicates an iteration boundary.
+    ///
+    /// Returns the type of boundary detected, or None if this is a regular line.
+    pub fn check_line(&self, line: &str) -> IterationBoundary {
+        // Check for "I'm done with" first (higher priority - indicates exit)
+        if self.done_pattern.is_match(line) {
+            return IterationBoundary::Done;
+        }
+
+        // Check for conventional commit patterns
+        if self.commit_pattern.is_match(line) {
+            return IterationBoundary::Completed;
+        }
+
+        IterationBoundary::None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_feat_commit() {
+        let detector = IterationDetector::new();
+        assert_eq!(
+            detector.check_line("feat: add new feature"),
+            IterationBoundary::Completed
+        );
+        assert_eq!(
+            detector.check_line("  feat: indented commit"),
+            IterationBoundary::Completed
+        );
+    }
+
+    #[test]
+    fn test_detect_fix_commit() {
+        let detector = IterationDetector::new();
+        assert_eq!(
+            detector.check_line("fix: resolve bug"),
+            IterationBoundary::Completed
+        );
+    }
+
+    #[test]
+    fn test_detect_scoped_commit() {
+        let detector = IterationDetector::new();
+        assert_eq!(
+            detector.check_line("feat(api): add endpoint"),
+            IterationBoundary::Completed
+        );
+        assert_eq!(
+            detector.check_line("fix(ui): button alignment"),
+            IterationBoundary::Completed
+        );
+    }
+
+    #[test]
+    fn test_detect_other_commit_types() {
+        let detector = IterationDetector::new();
+        assert_eq!(
+            detector.check_line("refactor: clean up code"),
+            IterationBoundary::Completed
+        );
+        assert_eq!(
+            detector.check_line("chore: update deps"),
+            IterationBoundary::Completed
+        );
+        assert_eq!(
+            detector.check_line("docs: update readme"),
+            IterationBoundary::Completed
+        );
+        assert_eq!(
+            detector.check_line("test: add unit tests"),
+            IterationBoundary::Completed
+        );
+    }
+
+    #[test]
+    fn test_detect_done_message() {
+        let detector = IterationDetector::new();
+        assert_eq!(
+            detector.check_line("I'm done with task 7.1"),
+            IterationBoundary::Done
+        );
+        assert_eq!(
+            detector.check_line("say \"I'm done with implementing the feature.\""),
+            IterationBoundary::Done
+        );
+    }
+
+    #[test]
+    fn test_no_boundary() {
+        let detector = IterationDetector::new();
+        assert_eq!(
+            detector.check_line("Reading file..."),
+            IterationBoundary::None
+        );
+        assert_eq!(
+            detector.check_line("  some output"),
+            IterationBoundary::None
+        );
+        assert_eq!(
+            detector.check_line("feature complete"),
+            IterationBoundary::None
+        );
+    }
+
+    #[test]
+    fn test_done_takes_priority() {
+        let detector = IterationDetector::new();
+        // If a line somehow contains both patterns, done should take priority
+        // This is unlikely in practice but tests priority ordering
+        assert_eq!(
+            detector.check_line("I'm done with feat: something"),
+            IterationBoundary::Done
+        );
     }
 }
 

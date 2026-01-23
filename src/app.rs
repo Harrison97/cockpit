@@ -5,7 +5,7 @@
 #![allow(dead_code)] // Methods will be used as more features are implemented
 
 use crate::agent::{Agent, AgentStatus};
-use crate::loop_manager::OutputLine;
+use crate::loop_manager::{IterationBoundary, IterationDetector, OutputLine};
 use crate::persistence::{
     append_to_log, load_recent_log, load_state, save_state, LoopState, PersistedState,
 };
@@ -62,6 +62,8 @@ pub struct App {
     pending_project_path: Option<PathBuf>,
     /// Status message to display (cleared after showing)
     pub status_message: Option<String>,
+    /// Detector for iteration boundaries in output
+    iteration_detector: IterationDetector,
 }
 
 impl App {
@@ -88,6 +90,7 @@ impl App {
             input_buffer: String::new(),
             pending_project_path: None,
             status_message: None,
+            iteration_detector: IterationDetector::new(),
         }
     }
 
@@ -297,6 +300,7 @@ impl App {
     ///
     /// Drains the output channel and routes lines to the appropriate agents.
     /// Also writes output to log files for persistence.
+    /// Checks for iteration boundaries and increments iteration counters.
     /// Auto-scrolls to bottom when new output is added if pinned_to_bottom is true.
     pub fn tick(&mut self) {
         self.frame_count += 1;
@@ -309,10 +313,16 @@ impl App {
             .map(|a| a.output.len())
             .unwrap_or(0);
 
+        // Track if any agent's iteration count changed (for state saving)
+        let mut iteration_changed = false;
+
         // Drain the output channel and route to appropriate agents
         while let Ok(output_line) = self.output_rx.try_recv() {
             // Write to log file (ignore errors - logging is best-effort)
             let _ = append_to_log(&output_line.agent_name, &output_line.line);
+
+            // Check for iteration boundaries
+            let boundary = self.iteration_detector.check_line(&output_line.line);
 
             // Find the agent with matching name and add the output
             if let Some(agent) = self
@@ -321,7 +331,21 @@ impl App {
                 .find(|a| a.name == output_line.agent_name)
             {
                 agent.add_output(&output_line.line);
+
+                // Increment iteration counter on boundary detection
+                match boundary {
+                    IterationBoundary::Completed | IterationBoundary::Done => {
+                        agent.iteration += 1;
+                        iteration_changed = true;
+                    }
+                    IterationBoundary::None => {}
+                }
             }
+        }
+
+        // Save state if iteration count changed
+        if iteration_changed {
+            self.save_state();
         }
 
         // Check if selected agent got new output
