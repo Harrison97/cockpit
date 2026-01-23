@@ -5,7 +5,12 @@
 #![allow(dead_code)] // Methods will be used as more features are implemented
 
 use crate::agent::{create_mock_agents, Agent, AgentStatus};
+use crate::loop_manager::OutputLine;
 use std::time::Instant;
+use tokio::sync::mpsc;
+
+/// Channel buffer size for subprocess output
+const OUTPUT_CHANNEL_SIZE: usize = 1000;
 
 /// Main application state
 pub struct App {
@@ -26,12 +31,17 @@ pub struct App {
     last_tick: Instant,
     /// Frame counter for timing updates
     frame_count: u64,
+    /// Sender for subprocess output - clone this and pass to RalphLoop::start()
+    pub output_tx: mpsc::Sender<OutputLine>,
+    /// Receiver for subprocess output - drained in tick()
+    output_rx: mpsc::Receiver<OutputLine>,
 }
 
 impl App {
     /// Creates a new App with mock agents
     pub fn new() -> Self {
         let agents = create_mock_agents();
+        let (output_tx, output_rx) = mpsc::channel(OUTPUT_CHANNEL_SIZE);
         Self {
             agents,
             selected_index: 0,
@@ -41,6 +51,8 @@ impl App {
             pinned_to_bottom: true,
             last_tick: Instant::now(),
             frame_count: 0,
+            output_tx,
+            output_rx,
         }
     }
 
@@ -209,8 +221,9 @@ impl App {
 
     /// Called each frame to update application state
     ///
-    /// Updates running agents' mock output at randomized intervals (2-5 seconds per agent)
-    /// Auto-scrolls to bottom when new output is added if pinned_to_bottom is true
+    /// Drains the output channel and routes lines to the appropriate agents.
+    /// Also updates running agents' mock output at randomized intervals (2-5 seconds per agent).
+    /// Auto-scrolls to bottom when new output is added if pinned_to_bottom is true.
     pub fn tick(&mut self) {
         self.frame_count += 1;
         self.last_tick = Instant::now();
@@ -222,7 +235,20 @@ impl App {
             .map(|a| a.output.len())
             .unwrap_or(0);
 
+        // Drain the output channel and route to appropriate agents
+        while let Ok(output_line) = self.output_rx.try_recv() {
+            // Find the agent with matching name and add the output
+            if let Some(agent) = self
+                .agents
+                .iter_mut()
+                .find(|a| a.name == output_line.agent_name)
+            {
+                agent.add_output(&output_line.line);
+            }
+        }
+
         // Check each agent for output updates (each has its own random timer)
+        // This is mock output that will be removed when real subprocess output is implemented
         for agent in &mut self.agents {
             if agent.is_output_due() {
                 agent.add_next_mock_output();

@@ -1,4 +1,32 @@
 use std::path::PathBuf;
+use std::time::Instant;
+
+/// A line of output from a ralph loop subprocess.
+/// Sent from the async reader task to the main app via mpsc channel.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct OutputLine {
+    /// Which agent this output belongs to
+    pub agent_name: String,
+
+    /// The actual output text
+    pub line: String,
+
+    /// When this line was received
+    pub timestamp: Instant,
+}
+
+#[allow(dead_code)]
+impl OutputLine {
+    /// Create a new OutputLine with the current timestamp
+    pub fn new(agent_name: String, line: String) -> Self {
+        Self {
+            agent_name,
+            line,
+            timestamp: Instant::now(),
+        }
+    }
+}
 
 /// Manages a ralph loop subprocess.
 /// A ralph loop continuously runs Claude Code in a bash loop,

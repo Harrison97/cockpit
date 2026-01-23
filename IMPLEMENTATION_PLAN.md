@@ -24,7 +24,7 @@
   - Add: `directories = "5"`
   - Run `cargo build` to verify
 
-- [ ] **1.5 Implement output channel**
+- [x] **1.5 Implement output channel**
   - Create `tokio::sync::mpsc` channel in App
   - Store sender in App for subprocess use
   - Modify tick() to drain receiver into agent output buffers
