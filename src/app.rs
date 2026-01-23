@@ -332,11 +332,18 @@ impl App {
             {
                 agent.add_output(&output_line.line);
 
-                // Increment iteration counter on boundary detection
+                // Increment iteration counter on boundary detection and add visual separator
                 match boundary {
                     IterationBoundary::Completed | IterationBoundary::Done => {
                         agent.iteration += 1;
                         iteration_changed = true;
+
+                        // Add visual separator after the iteration boundary
+                        let separator = format!(
+                            "───────────────────── iteration {} ─────────────────────",
+                            agent.iteration
+                        );
+                        agent.add_output(&separator);
                     }
                     IterationBoundary::None => {}
                 }

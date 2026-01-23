@@ -153,11 +153,11 @@
   - Detect "I'm done with" exit messages
   - Track iteration boundaries
 
-- [ ] **7.2 Update iteration counter**
+- [x] **7.2 Update iteration counter**
   - Increment agent.iteration on detected boundary
   - Update UI to show real count
 
-- [ ] **7.3 Add visual separators**
+- [x] **7.3 Add visual separators**
   - Insert separator line between iterations in output
   - Style: dim line with iteration number
 

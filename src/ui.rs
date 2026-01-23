@@ -250,6 +250,17 @@ fn render_output_pane(
     let mut lines: Vec<Line> = Vec::new();
 
     for (i, output_line) in agent.output.iter().enumerate() {
+        // Check if this is a separator line (iteration boundary)
+        if output_line.starts_with("─────") {
+            // Render separator line in dim style, centered without timestamp
+            let line = Line::from(Span::styled(
+                output_line.as_str(),
+                Style::default().fg(Color::DarkGray),
+            ));
+            lines.push(line);
+            continue;
+        }
+
         // Generate a mock timestamp (decrement by 3 seconds per line from current time)
         let line_offset = (agent.output.len().saturating_sub(i + 1)) * 3;
         let line_time = now - chrono::Duration::seconds(line_offset as i64);
