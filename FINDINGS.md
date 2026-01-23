@@ -34,6 +34,10 @@ Full comprehensive audit completed. No new MUST FIX or SHOULD FIX issues found.
 - Optional incomplete: History file rotation (13.4 in IMPLEMENTATION_PLAN)
 - Total lines of code: 4196 (unchanged)
 
+**Corrections to CHECKLIST.md:**
+- "Zombie processes reaped" - Changed to PARTIAL. Code gives up after 3s and can leave zombies (see loop_manager.rs:517-520 comment). Low practical risk since SIGKILL forces exit except in rare D state.
+- "Channel senders dropped on shutdown" - Clarified mechanism. Sender clone is dropped when reader thread exits (after `running=false`), not directly by `ralph_loop = None`.
+
 **Conclusion:**
 Codebase remains stable and production-ready for v1. All safety invariants verified.
 No code changes required this iteration. After 10 consecutive audit iterations (4 with fixes, 6 clean), the codebase has reached a mature, hardened state.

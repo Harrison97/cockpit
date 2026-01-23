@@ -15,14 +15,14 @@ Last verified: 2026-01-23 (Iteration 10)
 - [x] All spawned processes tracked - verified 2026-01-23 (child handle stored, wait_for_child_exit called)
 - [x] SIGTERM sent before SIGKILL - verified 2026-01-23 (wait_for_child_exit: 2s grace, then kill)
 - [ ] Process group used for signal propagation - NOT IMPLEMENTED (uses portable_pty, not raw process groups)
-- [x] Zombie processes reaped - verified 2026-01-23 (wait_for_child_exit loops until reaped or timeout)
+- [~] Zombie processes reaped - PARTIAL (wait_for_child_exit gives up after 3s, may leave zombie if process stuck in D state)
 
 ## Thread Safety
 
 - [x] All Arc<Mutex<>> access handles poisoned locks - verified 2026-01-23 (fixed this iteration)
 - [x] AtomicBool uses SeqCst ordering - verified 2026-01-23 (all Ordering::SeqCst in loop_manager.rs)
 - [x] No data races between PTY reader and main thread - verified 2026-01-23 (mpsc channel isolation)
-- [x] Channel senders dropped on shutdown - verified 2026-01-23 (agent.ralph_loop = None in stop())
+- [x] Channel senders dropped on shutdown - verified 2026-01-23 (tx clone dropped when reader thread exits after running=false)
 
 ## Terminal Safety
 
