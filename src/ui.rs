@@ -350,7 +350,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
             } else if app.output_focused {
                 " j/k: scroll  Esc: back  Ctrl+d/u: page  q: quit".to_string()
             } else {
-                " j/k: navigate  n: new  Enter: focus  p: pause  r: resume  q: quit".to_string()
+                " j/k: navigate  n: new  i: instruct  p: pause  r: resume  q: quit".to_string()
             };
 
             let style = if app.status_message.is_some() {

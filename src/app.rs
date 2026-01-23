@@ -21,6 +21,8 @@ pub enum InputMode {
     EnteringPath,
     /// Entering prompt content for new loop
     EnteringPrompt,
+    /// Entering instruction for selected loop
+    EnteringInstruction,
 }
 
 /// Channel buffer size for subprocess output
@@ -327,6 +329,23 @@ impl App {
         self.pending_project_path = None;
     }
 
+    /// Starts the "instruct" flow by entering instruction input mode
+    pub fn start_instruction(&mut self) {
+        // Only allow instruction if selected agent has a project path
+        if let Some(agent) = self.selected_agent() {
+            if agent.project_path.is_none() {
+                self.status_message = Some("No project path for this agent".to_string());
+                return;
+            }
+        } else {
+            self.status_message = Some("No agent selected".to_string());
+            return;
+        }
+
+        self.input_mode = InputMode::EnteringInstruction;
+        self.input_buffer.clear();
+    }
+
     /// Submits the current input based on input mode
     fn submit_input(&mut self) {
         match self.input_mode {
@@ -345,6 +364,10 @@ impl App {
             InputMode::EnteringPrompt => {
                 // Create the project and add agent
                 self.create_loop_from_input();
+            }
+            InputMode::EnteringInstruction => {
+                // Send instruction to selected agent's project
+                self.submit_instruction();
             }
         }
     }
@@ -395,12 +418,64 @@ impl App {
         self.input_mode = InputMode::Normal;
     }
 
+    /// Submits the instruction to the selected agent's project
+    fn submit_instruction(&mut self) {
+        let instruction_text = self.input_buffer.trim().to_string();
+
+        // Don't allow empty instructions
+        if instruction_text.is_empty() {
+            self.status_message = Some("Instruction cannot be empty".to_string());
+            self.input_buffer.clear();
+            self.input_mode = InputMode::Normal;
+            return;
+        }
+
+        // Get the project path from the selected agent
+        let project_path = match self.selected_agent() {
+            Some(agent) => match &agent.project_path {
+                Some(path) => path.clone(),
+                None => {
+                    self.status_message = Some("No project path for this agent".to_string());
+                    self.input_buffer.clear();
+                    self.input_mode = InputMode::Normal;
+                    return;
+                }
+            },
+            None => {
+                self.status_message = Some("No agent selected".to_string());
+                self.input_buffer.clear();
+                self.input_mode = InputMode::Normal;
+                return;
+            }
+        };
+
+        // Load the project and append the instruction
+        match RalphProject::from_path(project_path) {
+            Ok(project) => match project.append_instruction(&instruction_text) {
+                Ok(()) => {
+                    self.status_message = Some("Instruction sent".to_string());
+                }
+                Err(e) => {
+                    self.status_message = Some(format!("Failed to write instruction: {}", e));
+                }
+            },
+            Err(e) => {
+                self.status_message = Some(format!("Failed to load project: {}", e));
+            }
+        }
+
+        // Return to normal mode
+        self.input_buffer.clear();
+        self.input_mode = InputMode::Normal;
+    }
+
     /// Returns the prompt text to show for the current input mode
     pub fn input_prompt(&self) -> &str {
         match self.input_mode {
             InputMode::Normal => "",
             InputMode::EnteringPath => "Project path: ",
             InputMode::EnteringPrompt => "Prompt (Enter for default): ",
+            InputMode::EnteringInstruction => "Instruction: ",
         }
     }
 
@@ -505,6 +580,11 @@ impl App {
                 // New loop creation
                 KeyCode::Char('n') => {
                     self.start_new_loop();
+                    true
+                }
+                // Instruction input
+                KeyCode::Char('i') => {
+                    self.start_instruction();
                     true
                 }
                 _ => false,

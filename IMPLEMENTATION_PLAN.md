@@ -113,7 +113,7 @@
   - Create/append to PRIORITY_INSTRUCTIONS.md
   - File will be read by next Claude iteration
 
-- [ ] **5.2 Add instruction UI**
+- [x] **5.2 Add instruction UI**
   - Add keybinding `i` for instruct
   - Simple line input at bottom of screen
   - Write to project's instruction file
