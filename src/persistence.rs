@@ -47,9 +47,9 @@ pub fn get_state_file_path() -> PathBuf {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoopState {
     pub name: String,
-    /// The agent's internal directory (.agents/<name>) where PROMPT.md lives
-    pub project_path: PathBuf,
-    /// The target repo root where the agent executes commands
+    /// The agent's config directory (.cockpit/agents/<name>) where PROMPT.md and history.log live
+    pub agent_dir: PathBuf,
+    /// The working directory where Claude Code runs (the repo root)
     #[serde(default)]
     pub working_dir: Option<PathBuf>,
     pub last_iteration: u32,

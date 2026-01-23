@@ -171,9 +171,9 @@ pub struct Agent {
     /// Terminal parser for full TUI rendering
     pub terminal: Arc<Mutex<vt100::Parser>>,
     pub iteration: u32,
-    /// The agent's internal directory (.agents/<name>) where PROMPT.md lives
-    pub project_path: Option<PathBuf>,
-    /// The target repo root where the agent executes commands
+    /// The agent's config directory (.cockpit/agents/<name>) where PROMPT.md and history.log live
+    pub agent_dir: Option<PathBuf>,
+    /// The working directory where Claude Code runs (the repo root)
     pub working_dir: Option<PathBuf>,
     pub ralph_loop: Option<RalphLoop>,
     /// Type of agent: RalphLoop or ClaudeInstance
@@ -203,7 +203,7 @@ impl Agent {
                 SCROLLBACK_SIZE,
             ))),
             iteration: 0,
-            project_path: None,
+            agent_dir: None,
             working_dir: None,
             last_size: (TERM_ROWS, TERM_COLS),
             ralph_loop: None,
@@ -217,7 +217,7 @@ impl Agent {
 
     pub fn with_project(
         name: &str,
-        project_path: PathBuf,
+        agent_dir: PathBuf,
         working_dir: PathBuf,
         agent_type: AgentType,
     ) -> Self {
@@ -229,7 +229,7 @@ impl Agent {
 
         // History will be loaded lazily on first resize to use correct terminal size
         // Open history file for appending (creates if needed)
-        let history_file = Self::open_history_file(&project_path);
+        let history_file = Self::open_history_file(&agent_dir);
 
         Self {
             name: name.to_string(),
@@ -237,7 +237,7 @@ impl Agent {
             start_time: None,
             terminal,
             iteration: 0,
-            project_path: Some(project_path),
+            agent_dir: Some(agent_dir),
             working_dir: Some(working_dir),
             ralph_loop: None,
             agent_type,
@@ -250,13 +250,13 @@ impl Agent {
     }
 
     /// Get the history file path for this agent (stored in project folder)
-    fn get_history_path(project_path: &Path) -> PathBuf {
-        project_path.join("history.log")
+    fn get_history_path(agent_dir: &Path) -> PathBuf {
+        agent_dir.join("history.log")
     }
 
     /// Open the history file for appending, creating the directory structure if needed
-    fn open_history_file(project_path: &Path) -> Option<File> {
-        let path = Self::get_history_path(project_path);
+    fn open_history_file(agent_dir: &Path) -> Option<File> {
+        let path = Self::get_history_path(agent_dir);
 
         // Create parent directories if needed
         if let Some(parent) = path.parent() {
@@ -285,11 +285,11 @@ impl Agent {
         }
         self.history_loaded = true;
 
-        let Some(ref project_path) = self.project_path else {
+        let Some(ref agent_dir) = self.agent_dir else {
             return;
         };
 
-        let path = Self::get_history_path(project_path);
+        let path = Self::get_history_path(agent_dir);
         if !path.exists() {
             return;
         }
@@ -504,13 +504,13 @@ impl Agent {
         // Set process state to Starting before spawning
         self.process_state = ProcessState::Starting;
 
-        if let Some(ref project_path) = self.project_path {
+        if let Some(ref agent_dir) = self.agent_dir {
             let working_dir = self
                 .working_dir
                 .clone()
-                .unwrap_or_else(|| project_path.clone());
+                .unwrap_or_else(|| agent_dir.clone());
             let is_ralph_loop = self.agent_type == AgentType::RalphLoop;
-            let mut ralph_loop = RalphLoop::new(project_path.clone(), working_dir, is_ralph_loop);
+            let mut ralph_loop = RalphLoop::new(agent_dir.clone(), working_dir, is_ralph_loop);
 
             let mut last_error = None;
             for attempt in 0..Self::MAX_SPAWN_RETRIES {
@@ -619,7 +619,7 @@ impl Agent {
     }
 
     pub fn has_project(&self) -> bool {
-        self.project_path.is_some()
+        self.agent_dir.is_some()
     }
 
     pub fn is_subprocess_running(&self) -> bool {

@@ -55,7 +55,7 @@ pub struct App {
     pub input_buffer: String,
     /// If Some, input contains a paste - stores (char_count, line_count)
     pub paste_info: Option<(usize, usize)>,
-    pending_project_path: Option<PathBuf>,
+    pending_agent_dir: Option<PathBuf>,
     pending_agent_name: Option<String>,
     pub status_message: Option<String>,
     pub show_help: bool,
@@ -90,7 +90,7 @@ impl App {
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
             paste_info: None,
-            pending_project_path: None,
+            pending_agent_dir: None,
             pending_agent_name: None,
             status_message: None,
             show_help: false,
@@ -473,20 +473,20 @@ impl App {
         self.input_mode = InputMode::EnteringPath;
         self.input_buffer.clear();
         self.paste_info = None;
-        self.pending_project_path = None;
+        self.pending_agent_dir = None;
     }
 
     pub fn cancel_input(&mut self) {
         self.input_mode = InputMode::Normal;
         self.input_buffer.clear();
         self.paste_info = None;
-        self.pending_project_path = None;
+        self.pending_agent_dir = None;
         self.pending_agent_name = None;
     }
 
     pub fn start_instruction(&mut self) {
         if let Some(agent) = self.selected_agent() {
-            if agent.project_path.is_none() {
+            if agent.agent_dir.is_none() {
                 self.status_message = Some("No project path for this agent".to_string());
                 return;
             }
@@ -509,7 +509,7 @@ impl App {
                     self.status_message = Some("Path cannot be empty".to_string());
                     return;
                 }
-                self.pending_project_path = Some(path);
+                self.pending_agent_dir = Some(path);
                 self.input_buffer.clear();
                 self.paste_info = None;
                 self.input_mode = InputMode::EnteringName;
@@ -517,7 +517,7 @@ impl App {
             InputMode::EnteringName => {
                 let name = self.input_buffer.trim().to_string();
                 let final_name = if name.is_empty() {
-                    if let Some(ref path) = self.pending_project_path {
+                    if let Some(ref path) = self.pending_agent_dir {
                         path.file_name()
                             .and_then(|n| n.to_str())
                             .unwrap_or("unnamed")
@@ -560,7 +560,7 @@ impl App {
     }
 
     fn create_loop_from_input(&mut self) {
-        let Some(base_path) = self.pending_project_path.take() else {
+        let Some(base_path) = self.pending_agent_dir.take() else {
             self.status_message = Some("No project path set".to_string());
             self.cancel_input();
             return;
@@ -582,21 +582,21 @@ impl App {
         };
 
         let agents_dir = get_agents_dir();
-        let project_path = agents_dir.join(&agent_name);
+        let agent_dir = agents_dir.join(&agent_name);
 
         // Defense-in-depth: verify the resolved path stays within agents directory
         // This catches any path traversal that might have slipped through name validation
-        let resolved_project = project_path.canonicalize().unwrap_or_else(|_| {
+        let resolved_project = agent_dir.canonicalize().unwrap_or_else(|_| {
             // If path doesn't exist yet, check parent exists and construct expected path
-            if let Some(parent) = project_path.parent() {
+            if let Some(parent) = agent_dir.parent() {
                 if let Ok(resolved_parent) = parent.canonicalize() {
-                    if let Some(name) = project_path.file_name() {
+                    if let Some(name) = agent_dir.file_name() {
                         return resolved_parent.join(name);
                     }
                 }
             }
             // Fallback: use the raw path if we can't resolve
-            project_path.clone()
+            agent_dir.clone()
         });
         if let Ok(resolved_agents) = agents_dir.canonicalize() {
             if !resolved_project.starts_with(&resolved_agents) {
@@ -610,9 +610,9 @@ impl App {
 
         let working_dir = base_path.clone();
 
-        match RalphProject::create(project_path.clone(), &prompt_content) {
+        match RalphProject::create(agent_dir.clone(), &prompt_content) {
             Ok(_project) => {
-                let agent = Agent::with_project(&agent_name, project_path, working_dir, agent_type);
+                let agent = Agent::with_project(&agent_name, agent_dir, working_dir, agent_type);
                 self.agents.push(agent);
                 self.selected_index = self.agents.len() - 1;
                 let type_label = match agent_type {
@@ -655,7 +655,7 @@ impl App {
                 }
             } else {
                 // Fall back to writing to file if not running
-                if let Some(ref path) = agent.project_path {
+                if let Some(ref path) = agent.agent_dir {
                     match RalphProject::from_path(path.clone()) {
                         Ok(project) => match project.append_instruction(&instruction_text) {
                             Ok(()) => {
@@ -1069,10 +1069,10 @@ impl App {
         let mut state = PersistedState::new();
 
         for agent in &self.agents {
-            if let Some(ref project_path) = agent.project_path {
+            if let Some(ref agent_dir) = agent.agent_dir {
                 state.upsert_loop(LoopState {
                     name: agent.name.clone(),
-                    project_path: project_path.clone(),
+                    agent_dir: agent_dir.clone(),
                     working_dir: agent.working_dir.clone(),
                     last_iteration: agent.iteration,
                     agent_type: agent.agent_type,
@@ -1113,19 +1113,19 @@ fn load_agents_from_state() -> Vec<Agent> {
             .loops
             .into_iter()
             .map(|loop_state| {
-                // For backwards compatibility, derive working_dir from project_path if not set
+                // For backwards compatibility, derive working_dir from agent_dir if not set
                 let working_dir = loop_state.working_dir.unwrap_or_else(|| {
-                    // project_path is .agents/<name>, so working_dir is two levels up
+                    // agent_dir is .agents/<name>, so working_dir is two levels up
                     loop_state
-                        .project_path
+                        .agent_dir
                         .parent()
                         .and_then(|p| p.parent())
                         .map(|p| p.to_path_buf())
-                        .unwrap_or_else(|| loop_state.project_path.clone())
+                        .unwrap_or_else(|| loop_state.agent_dir.clone())
                 });
                 let mut agent = Agent::with_project(
                     &loop_state.name,
-                    loop_state.project_path,
+                    loop_state.agent_dir,
                     working_dir,
                     loop_state.agent_type,
                 );

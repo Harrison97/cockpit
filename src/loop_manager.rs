@@ -160,7 +160,7 @@ enum PtyCmd {
 /// This implementation uses tokio throughout for proper async cancellation.
 pub struct RalphLoop {
     /// The agent's internal directory where PROMPT.md lives
-    pub project_path: PathBuf,
+    pub agent_dir: PathBuf,
     /// The target repo root where commands are executed
     pub working_dir: PathBuf,
     /// True for ralph loops (has PROMPT.md, auto-restarts), false for Claude instances
@@ -178,9 +178,9 @@ pub struct RalphLoop {
 }
 
 impl RalphLoop {
-    pub fn new(project_path: PathBuf, working_dir: PathBuf, is_ralph_loop: bool) -> Self {
+    pub fn new(agent_dir: PathBuf, working_dir: PathBuf, is_ralph_loop: bool) -> Self {
         Self {
-            project_path,
+            agent_dir,
             working_dir,
             is_ralph_loop,
             cancel_token: CancellationToken::new(),
@@ -236,7 +236,7 @@ impl RalphLoop {
             return Err(LoopError::AlreadyRunning);
         }
 
-        let path = self.project_path.clone();
+        let path = self.agent_dir.clone();
 
         if !path.exists() {
             return Err(LoopError::ProjectNotFound(path));
@@ -273,7 +273,7 @@ impl RalphLoop {
         let cancel_token = self.cancel_token.clone();
         let running = self.running.clone();
         let paused = self.paused.clone();
-        let project_path = self.project_path.clone();
+        let agent_dir = self.agent_dir.clone();
         let working_dir = self.working_dir.clone();
         let is_ralph_loop = self.is_ralph_loop;
 
@@ -285,7 +285,7 @@ impl RalphLoop {
                 paused,
                 cmd_rx,
                 tx,
-                project_path,
+                agent_dir,
                 working_dir,
                 prompt_content,
                 agent_name,
@@ -307,7 +307,7 @@ impl RalphLoop {
         paused: Arc<AtomicBool>,
         mut cmd_rx: mpsc::Receiver<PtyCmd>,
         tx: mpsc::Sender<TerminalData>,
-        project_path: PathBuf,
+        agent_dir: PathBuf,
         working_dir: PathBuf,
         prompt_content: Option<String>,
         agent_name: String,
@@ -329,7 +329,7 @@ impl RalphLoop {
                 &paused,
                 &mut cmd_rx,
                 &tx,
-                &project_path,
+                &agent_dir,
                 &working_dir,
                 prompt_content.as_deref(),
                 &agent_name,
@@ -400,7 +400,7 @@ impl RalphLoop {
         paused: &Arc<AtomicBool>,
         cmd_rx: &mut mpsc::Receiver<PtyCmd>,
         tx: &mpsc::Sender<TerminalData>,
-        project_path: &Path,
+        agent_dir: &Path,
         working_dir: &Path,
         _prompt_content: Option<&str>,
         agent_name: &str,
@@ -425,7 +425,7 @@ impl RalphLoop {
 
         // Build the command based on agent type
         let cmd_str = if is_ralph_loop {
-            let prompt_path = project_path.join("PROMPT.md");
+            let prompt_path = agent_dir.join("PROMPT.md");
             let prompt_path_str = prompt_path.to_string_lossy();
             format!(
                 "cat '{}' | claude --dangerously-skip-permissions",
