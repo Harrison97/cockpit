@@ -37,7 +37,7 @@
   - Add module declaration in main.rs
   - Define render function signature that takes frame and app state
 
-- [ ] **3.2 Implement main layout**
+- [x] **3.2 Implement main layout**
   - Create vertical layout: header (3), main (flex), footer (1)
   - Create horizontal split for main: left (20%), right (80%)
   - Use Constraint::Percentage and Constraint::Length
