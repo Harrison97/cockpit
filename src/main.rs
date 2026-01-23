@@ -1,4 +1,5 @@
 mod agent;
+mod ui;
 
 use std::io;
 
