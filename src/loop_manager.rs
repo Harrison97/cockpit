@@ -6,9 +6,41 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
+use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
+
+/// Errors that can occur when managing ralph loops
+#[derive(Error, Debug)]
+pub enum LoopError {
+    #[error("Loop is already running")]
+    AlreadyRunning,
+
+    #[error("Loop is not running")]
+    NotRunning,
+
+    #[error("Project directory not found: {0}")]
+    ProjectNotFound(PathBuf),
+
+    #[error("PROMPT.md not found in project directory")]
+    PromptNotFound,
+
+    #[error("Failed to start subprocess: {0}")]
+    SpawnFailed(String),
+
+    #[error("Failed to capture subprocess output")]
+    OutputCaptureFailed,
+
+    #[error("Failed to pause: {0}")]
+    PauseFailed(String),
+
+    #[error("Failed to resume: {0}")]
+    ResumeFailed(String),
+
+    #[error("Claude CLI not found. Install it with: npm install -g @anthropic-ai/claude-code")]
+    ClaudeNotFound,
+}
 
 /// A line of output from a ralph loop subprocess.
 /// Sent from the async reader task to the main app via mpsc channel.
@@ -205,6 +237,15 @@ mod tests {
     }
 }
 
+/// Checks if the claude CLI is installed and available in PATH.
+fn is_claude_installed() -> bool {
+    std::process::Command::new("which")
+        .arg("claude")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
 /// Manages a ralph loop subprocess.
 /// A ralph loop continuously runs Claude Code in a bash loop,
 /// reading PROMPT.md and executing tasks.
@@ -244,16 +285,40 @@ impl RalphLoop {
     ///
     /// Spawns bash with the ralph loop command and configures stdout capture.
     /// The agent_name is used to tag output lines sent through the channel.
+    ///
+    /// # Errors
+    /// Returns `LoopError::AlreadyRunning` if the loop is already running.
+    /// Returns `LoopError::ProjectNotFound` if the project directory doesn't exist.
+    /// Returns `LoopError::PromptNotFound` if PROMPT.md doesn't exist in the project.
+    /// Returns `LoopError::ClaudeNotFound` if the claude CLI isn't installed.
+    /// Returns `LoopError::SpawnFailed` if the subprocess fails to start.
     pub fn start(
         &mut self,
         agent_name: String,
         tx: mpsc::Sender<OutputLine>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(), LoopError> {
         if self.is_running() {
-            return Err("Loop is already running".into());
+            return Err(LoopError::AlreadyRunning);
         }
 
         let path = self.project_path.clone();
+
+        // Validate project directory exists
+        if !path.exists() {
+            return Err(LoopError::ProjectNotFound(path));
+        }
+
+        // Validate PROMPT.md exists
+        let prompt_path = path.join("PROMPT.md");
+        if !prompt_path.exists() {
+            return Err(LoopError::PromptNotFound);
+        }
+
+        // Check if claude CLI is available
+        if !is_claude_installed() {
+            return Err(LoopError::ClaudeNotFound);
+        }
+
         let path_str = path.to_string_lossy();
 
         // Build the bash command that runs the ralph loop
@@ -279,7 +344,9 @@ impl RalphLoop {
             });
         }
 
-        let mut child = command.spawn()?;
+        let mut child = command
+            .spawn()
+            .map_err(|e| LoopError::SpawnFailed(format!("Could not start bash: {}", e)))?;
 
         // Extract PID and PGID
         let pid = child.id();
@@ -288,10 +355,7 @@ impl RalphLoop {
         self.pgid = pid.map(|p| p as i32);
 
         // Take stdout for the async reader
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or("Failed to capture stdout from subprocess")?;
+        let stdout = child.stdout.take().ok_or(LoopError::OutputCaptureFailed)?;
 
         // Store the child handle
         self.child = Some(child);
@@ -328,15 +392,15 @@ impl RalphLoop {
     /// Pause the ralph loop subprocess.
     ///
     /// Sends SIGSTOP to the process group, freezing all processes (bash and claude).
-    pub fn pause(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn pause(&mut self) -> Result<(), LoopError> {
         let pgid = match self.pgid {
             Some(pgid) => pgid,
-            None => return Err("Loop is not running".into()),
+            None => return Err(LoopError::NotRunning),
         };
 
         // Send SIGSTOP to the entire process group (negative PID targets the group)
         kill(Pid::from_raw(-pgid), Signal::SIGSTOP)
-            .map_err(|e| format!("Failed to pause process group: {}", e))?;
+            .map_err(|e| LoopError::PauseFailed(e.to_string()))?;
 
         Ok(())
     }
@@ -344,15 +408,15 @@ impl RalphLoop {
     /// Resume a paused ralph loop subprocess.
     ///
     /// Sends SIGCONT to the process group, allowing processes to continue.
-    pub fn resume(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn resume(&mut self) -> Result<(), LoopError> {
         let pgid = match self.pgid {
             Some(pgid) => pgid,
-            None => return Err("Loop is not running".into()),
+            None => return Err(LoopError::NotRunning),
         };
 
         // Send SIGCONT to the entire process group (negative PID targets the group)
         kill(Pid::from_raw(-pgid), Signal::SIGCONT)
-            .map_err(|e| format!("Failed to resume process group: {}", e))?;
+            .map_err(|e| LoopError::ResumeFailed(e.to_string()))?;
 
         Ok(())
     }

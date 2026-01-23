@@ -4,12 +4,38 @@
 
 #![allow(dead_code)] // Items will be used as more features are implemented
 
-use crate::loop_manager::{OutputLine, RalphLoop};
+use crate::loop_manager::{LoopError, OutputLine, RalphLoop};
 use ratatui::style::Color;
 use std::fmt;
 use std::path::PathBuf;
 use std::time::Instant;
 use tokio::sync::mpsc;
+
+/// Errors that can occur when managing agents
+#[derive(Debug)]
+pub enum AgentError {
+    /// Error from the underlying ralph loop
+    LoopError(LoopError),
+    /// Agent is not in a valid state for the requested operation
+    InvalidState(String),
+}
+
+impl std::fmt::Display for AgentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentError::LoopError(e) => write!(f, "{}", e),
+            AgentError::InvalidState(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+impl std::error::Error for AgentError {}
+
+impl From<LoopError> for AgentError {
+    fn from(err: LoopError) -> Self {
+        AgentError::LoopError(err)
+    }
+}
 
 /// Status of an AI agent
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -97,13 +123,17 @@ impl Agent {
         self.output.push(line.to_string());
     }
 
+    /// Maximum number of retries for transient spawn failures
+    const MAX_SPAWN_RETRIES: u32 = 3;
+
     /// Starts the agent, spawning a real ralph loop subprocess if a project path is configured.
     ///
     /// If no project_path is set, only updates the status (legacy behavior).
-    pub fn start(
-        &mut self,
-        tx: mpsc::Sender<OutputLine>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    /// Includes retry logic for transient spawn failures (up to 3 attempts).
+    ///
+    /// # Errors
+    /// Returns `AgentError::LoopError` if the subprocess fails to start after all retries.
+    pub fn start(&mut self, tx: mpsc::Sender<OutputLine>) -> Result<(), AgentError> {
         if self.status == AgentStatus::Running {
             return Ok(()); // Already running
         }
@@ -111,8 +141,38 @@ impl Agent {
         // If we have a project path, spawn the real subprocess
         if let Some(ref project_path) = self.project_path {
             let mut ralph_loop = RalphLoop::new(project_path.clone());
-            ralph_loop.start(self.name.clone(), tx)?;
-            self.ralph_loop = Some(ralph_loop);
+
+            // Retry logic for transient spawn failures
+            let mut last_error = None;
+            for attempt in 0..Self::MAX_SPAWN_RETRIES {
+                match ralph_loop.start(self.name.clone(), tx.clone()) {
+                    Ok(()) => {
+                        self.ralph_loop = Some(ralph_loop);
+                        self.status = AgentStatus::Running;
+                        self.start_time = Some(Instant::now());
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        // Don't retry for non-transient errors (config/validation issues)
+                        if !Self::is_transient_error(&e) {
+                            return Err(e.into());
+                        }
+                        last_error = Some(e);
+
+                        // Brief delay before retry (exponential backoff: 10ms, 20ms, 40ms)
+                        if attempt < Self::MAX_SPAWN_RETRIES - 1 {
+                            std::thread::sleep(std::time::Duration::from_millis(
+                                10 * (1 << attempt),
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // All retries exhausted
+            return Err(last_error
+                .map(AgentError::from)
+                .unwrap_or_else(|| AgentError::InvalidState("Spawn failed".into())));
         }
 
         self.status = AgentStatus::Running;
@@ -120,13 +180,30 @@ impl Agent {
         Ok(())
     }
 
+    /// Determines if an error is transient and worth retrying
+    fn is_transient_error(err: &LoopError) -> bool {
+        match err {
+            // Only retry spawn failures (could be temporary resource constraints)
+            LoopError::SpawnFailed(_) => true,
+            LoopError::OutputCaptureFailed => true,
+            // Don't retry configuration/validation errors
+            LoopError::AlreadyRunning
+            | LoopError::NotRunning
+            | LoopError::ProjectNotFound(_)
+            | LoopError::PromptNotFound
+            | LoopError::ClaudeNotFound
+            | LoopError::PauseFailed(_)
+            | LoopError::ResumeFailed(_) => false,
+        }
+    }
+
     /// Stops the agent, killing the subprocess if running.
     ///
     /// This is an async method because stopping the subprocess requires waiting.
-    pub async fn stop(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn stop(&mut self) -> Result<(), AgentError> {
         // Stop the ralph loop subprocess if we have one
         if let Some(ref mut ralph_loop) = self.ralph_loop {
-            ralph_loop.stop().await?;
+            let _ = ralph_loop.stop().await;
         }
         self.ralph_loop = None;
 
@@ -137,9 +214,13 @@ impl Agent {
 
     /// Pauses the agent by sending SIGSTOP to the subprocess.
     /// Keeps start time for uptime tracking.
-    pub fn pause(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ///
+    /// # Errors
+    /// Returns `AgentError::InvalidState` if the agent is not running.
+    /// Returns `AgentError::LoopError` if the signal fails to send.
+    pub fn pause(&mut self) -> Result<(), AgentError> {
         if self.status != AgentStatus::Running {
-            return Err("Agent is not running".into());
+            return Err(AgentError::InvalidState("Agent is not running".into()));
         }
 
         // Send SIGSTOP to the ralph loop subprocess if we have one
@@ -152,9 +233,13 @@ impl Agent {
     }
 
     /// Resumes a paused agent by sending SIGCONT to the subprocess.
-    pub fn resume(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ///
+    /// # Errors
+    /// Returns `AgentError::InvalidState` if the agent is not paused.
+    /// Returns `AgentError::LoopError` if the signal fails to send.
+    pub fn resume(&mut self) -> Result<(), AgentError> {
         if self.status != AgentStatus::Paused {
-            return Err("Agent is not paused".into());
+            return Err(AgentError::InvalidState("Agent is not paused".into()));
         }
 
         // Send SIGCONT to the ralph loop subprocess if we have one
