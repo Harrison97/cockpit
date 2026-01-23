@@ -7,7 +7,7 @@
   - Create src/main.rs with minimal "Hello, world!" to verify setup
   - Run `cargo build` to confirm dependencies resolve
 
-- [ ] **1.2 Create basic terminal setup**
+- [x] **1.2 Create basic terminal setup**
   - In main.rs: enable raw mode, enter alternate screen
   - Create Terminal with CrosstermBackend
   - Add cleanup on exit (disable raw mode, leave alternate screen)
