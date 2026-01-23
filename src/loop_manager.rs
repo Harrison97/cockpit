@@ -1,8 +1,6 @@
 #![allow(dead_code)]
 #![allow(clippy::too_many_arguments)]
 
-use nix::sys::signal::{kill, Signal};
-use nix::unistd::Pid;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use regex::Regex;
 use std::io::{Read, Write};
@@ -599,15 +597,22 @@ impl RalphLoop {
         *self.pty_writer.lock().unwrap() = None;
         *self.pty_master.lock().unwrap() = None;
 
-        if let Some(pid) = self.pid.take() {
-            let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
-        }
-
+        // Wait for reader thread to exit
+        // The thread checks `running` every 100ms and kills the child process when it sees false
+        // We use a timeout to avoid blocking forever if something goes wrong
         if let Some(handle) = self.reader_handle.take() {
-            // Don't block forever waiting for thread
-            let _ = handle.join();
+            let join_start = std::time::Instant::now();
+            loop {
+                if handle.is_finished() {
+                    let _ = handle.join();
+                    break;
+                }
+                if join_start.elapsed() >= Duration::from_secs(3) {
+                    // Timeout - thread will be cleaned up when it eventually exits
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
         }
 
         Ok(())
