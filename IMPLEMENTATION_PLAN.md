@@ -17,7 +17,7 @@
   - Add module declaration in main.rs
   - Define empty `RalphProject` struct placeholder
 
-- [ ] **1.4 Add new dependencies**
+- [x] **1.4 Add new dependencies**
   - Add to Cargo.toml: `nix = { version = "0.29", features = ["signal", "process"] }`
   - Add: `serde = { version = "1", features = ["derive"] }`
   - Add: `serde_json = "1"`
