@@ -278,7 +278,7 @@
   - Only forward input when `Ready`
   - Show visual indicator when input blocked: "[Starting...]" in title
 
-- [ ] **12.3 Handle restart transitions for RalphLoop**
+- [x] **12.3 Handle restart transitions for RalphLoop**
   - Detect loop restart (Claude exits, bash restarts)
   - Set state to `Starting` during transition
   - Set state to `Ready` when new Claude prompt appears

@@ -371,6 +371,13 @@ impl RalphLoop {
                     b"\r\n[Restarting iteration...]\r\n".to_vec(),
                 ));
                 std::thread::sleep(Duration::from_secs(1));
+
+                // Send starting marker to trigger process state transition
+                // This prevents input from bleeding into the new Claude instance
+                let _ = tx.blocking_send(TerminalData::new(
+                    agent_name.clone(),
+                    b"[Starting...]\r\n".to_vec(),
+                ));
             }
         }
     }

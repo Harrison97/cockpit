@@ -226,11 +226,26 @@ impl Agent {
         }
     }
 
+    /// Marker sent by loop_manager when a new Claude iteration is about to start
+    const STARTING_MARKER: &'static [u8] = b"[Starting...]";
+
     /// Process raw terminal data from the PTY
     pub fn process_terminal_data(&mut self, data: &[u8]) {
-        // Transition from Starting to Ready when first output is received
-        if self.process_state == ProcessState::Starting && !data.is_empty() {
-            self.process_state = ProcessState::Ready;
+        // Check for restart transition marker from ralph loop
+        // When detected, set Starting state to block input until new Claude instance is ready
+        let contains_starting_marker = data
+            .windows(Self::STARTING_MARKER.len())
+            .any(|w| w == Self::STARTING_MARKER);
+
+        if contains_starting_marker {
+            self.process_state = ProcessState::Starting;
+            // Don't transition to Ready yet - the starting marker itself doesn't count
+            // as real Claude output. Wait for actual output from the new instance.
+        } else {
+            // Transition from Starting to Ready when first real output is received
+            if self.process_state == ProcessState::Starting && !data.is_empty() {
+                self.process_state = ProcessState::Ready;
+            }
         }
 
         // Filter out mouse escape sequences that may leak from PTY
