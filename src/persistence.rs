@@ -4,10 +4,11 @@
 
 #![allow(dead_code)] // Functions will be used as more features are implemented
 
+use chrono::{DateTime, Local};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::io;
+use std::fs::{self, OpenOptions};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 
 /// Application name for directory paths
@@ -158,6 +159,72 @@ pub fn load_state() -> io::Result<PersistedState> {
     Ok(state)
 }
 
+/// Appends an output line to an agent's log file
+///
+/// Writes to ~/.cockpit/logs/{agent_name}.log in append mode.
+/// Each line is prefixed with an ISO 8601 timestamp.
+/// Creates the log directory and file if they don't exist.
+pub fn append_to_log(agent_name: &str, line: &str) -> io::Result<()> {
+    let log_path = get_agent_log_path(agent_name)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Could not determine log path"))?;
+
+    // Ensure the log directory exists
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // Open file in append mode, creating if necessary
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+
+    // Get current timestamp in ISO 8601 format
+    let timestamp: DateTime<Local> = Local::now();
+
+    // Write the timestamped line
+    writeln!(
+        file,
+        "[{}] {}",
+        timestamp.format("%Y-%m-%dT%H:%M:%S%.3f"),
+        line
+    )?;
+
+    Ok(())
+}
+
+/// Loads recent output history from an agent's log file
+///
+/// Reads the last `max_lines` from ~/.cockpit/logs/{agent_name}.log.
+/// Returns the lines without timestamps (for display in the output buffer).
+/// Returns an empty vector if the log file doesn't exist.
+pub fn load_recent_log(agent_name: &str, max_lines: usize) -> io::Result<Vec<String>> {
+    let log_path = get_agent_log_path(agent_name)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Could not determine log path"))?;
+
+    if !log_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let file = fs::File::open(&log_path)?;
+    let reader = BufReader::new(file);
+
+    // Collect all lines, stripping timestamps
+    let lines: Vec<String> = reader
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| {
+            // Lines are formatted as "[timestamp] content"
+            // Find the first "] " and take everything after
+            line.find("] ").map(|idx| line[idx + 2..].to_string())
+        })
+        .collect();
+
+    // Return the last max_lines
+    let start = lines.len().saturating_sub(max_lines);
+    Ok(lines[start..].to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +256,13 @@ mod tests {
         if let Some(path) = get_agent_log_path("test_agent") {
             assert!(path.ends_with("test_agent.log"));
         }
+    }
+
+    #[test]
+    fn test_load_recent_log_nonexistent() {
+        // Loading from a nonexistent agent should return empty vec
+        let result = load_recent_log("nonexistent_test_agent_xyz", 100);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
     }
 }

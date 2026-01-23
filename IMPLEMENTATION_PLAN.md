@@ -141,7 +141,7 @@
   - Recreate agents from persisted state
   - All start as Stopped (user must restart)
 
-- [ ] **6.4 Implement output logging**
+- [x] **6.4 Implement output logging**
   - Write output to `~/.cockpit/logs/{agent_name}.log`
   - Append mode, include timestamps
   - Load recent history on restart

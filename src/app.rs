@@ -6,7 +6,9 @@
 
 use crate::agent::{Agent, AgentStatus};
 use crate::loop_manager::OutputLine;
-use crate::persistence::{load_state, save_state, LoopState, PersistedState};
+use crate::persistence::{
+    append_to_log, load_recent_log, load_state, save_state, LoopState, PersistedState,
+};
 use crate::project::RalphProject;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -294,6 +296,7 @@ impl App {
     /// Called each frame to update application state
     ///
     /// Drains the output channel and routes lines to the appropriate agents.
+    /// Also writes output to log files for persistence.
     /// Auto-scrolls to bottom when new output is added if pinned_to_bottom is true.
     pub fn tick(&mut self) {
         self.frame_count += 1;
@@ -308,6 +311,9 @@ impl App {
 
         // Drain the output channel and route to appropriate agents
         while let Ok(output_line) = self.output_rx.try_recv() {
+            // Write to log file (ignore errors - logging is best-effort)
+            let _ = append_to_log(&output_line.agent_name, &output_line.line);
+
             // Find the agent with matching name and add the output
             if let Some(agent) = self
                 .agents
@@ -641,10 +647,14 @@ impl App {
     }
 }
 
+/// Maximum number of log lines to load on startup
+const MAX_LOG_HISTORY_LINES: usize = 1000;
+
 /// Loads agents from persisted state file
 ///
 /// Returns agents recreated from ~/.cockpit/state.json.
 /// All agents start in Stopped status - user must manually restart them.
+/// Also loads recent output history from log files.
 /// Returns an empty vector if no state file exists or loading fails.
 fn load_agents_from_state() -> Vec<Agent> {
     match load_state() {
@@ -657,6 +667,12 @@ fn load_agents_from_state() -> Vec<Agent> {
                     // Agent starts Stopped - user must restart manually
                     let mut agent = Agent::with_project(&loop_state.name, loop_state.project_path);
                     agent.iteration = loop_state.last_iteration;
+
+                    // Load recent output history from log file
+                    if let Ok(history) = load_recent_log(&loop_state.name, MAX_LOG_HISTORY_LINES) {
+                        agent.output = history;
+                    }
+
                     agent
                 })
                 .collect()
