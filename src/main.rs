@@ -8,6 +8,7 @@ mod ui;
 use std::io;
 use std::panic;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use app::App;
 use crossterm::{
@@ -32,6 +33,9 @@ fn cleanup_terminal() {
     }
 }
 
+/// Shared flag to signal shutdown from signal handler
+static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
     // Set up panic hook to cleanup terminal on panic
@@ -40,6 +44,24 @@ async fn main() -> io::Result<()> {
         cleanup_terminal();
         default_hook(info);
     }));
+
+    // Set up SIGINT/SIGTERM handler to trigger graceful shutdown
+    // This ensures terminal cleanup runs even when killed externally
+    let shutdown_flag = Arc::new(&SHUTDOWN_REQUESTED);
+    tokio::spawn(async move {
+        let mut sigint =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).unwrap();
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+
+        tokio::select! {
+            _ = sigint.recv() => {},
+            _ = sigterm.recv() => {},
+        }
+
+        // Signal received - request graceful shutdown
+        shutdown_flag.store(true, Ordering::SeqCst);
+    });
 
     // Setup terminal
     enable_raw_mode()?;
@@ -67,7 +89,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
     let mut app = App::new();
     let mut last_input = std::time::Instant::now();
 
-    while app.running {
+    while app.running && !SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
         // Update application state FIRST (process agent output, refresh search matches)
         // This ensures render sees fresh data
         app.tick();
