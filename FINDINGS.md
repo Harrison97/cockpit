@@ -1,5 +1,20 @@
 # Audit Findings
 
+## 2026-01-23 - Hardening Loop Iteration 4
+
+### SHOULD FIX (Completed this iteration)
+
+- [x] **Incorrect mutex lock pattern (double lock attempt)**
+  - Location: `src/loop_manager.rs:608-617` (spawn_claude_iteration cleanup)
+  - Risk: The pattern `if let Ok(...) = lock() {} else if let Err(...) = lock() {}` calls `lock()` twice.
+    If mutex is poisoned, the second lock attempt will also return Err, but we waste a lock attempt
+    and the logic doesn't properly handle the poisoned case since both branches call lock().
+  - Fix: Changed to single `match` expression like other corrected code in the same file.
+  - Note: This was a bug introduced during the earlier mutex poisoning fix iteration - the cleanup
+    code at the end of spawn_claude_iteration was missed and used the wrong pattern.
+
+---
+
 ## 2026-01-23 - Hardening Loop Iteration 3
 
 ### MUST FIX (Completed this iteration)
@@ -51,6 +66,20 @@
   - Fix: Replace all `.unwrap()` on mutex locks with proper poisoned mutex handling using `into_inner()` to recover the guard
 
 ## Verification Evidence
+
+### Double mutex lock pattern fix - 2026-01-23
+
+**Command**: `cargo fmt`
+**Result**: PASS (no changes)
+
+**Command**: `cargo clippy -- -D warnings`
+**Result**: PASS
+
+**Command**: `cargo build`
+**Result**: PASS
+
+**Command**: `cargo test`
+**Result**: PASS (4 tests passed)
 
 ### Path traversal fix - 2026-01-23
 

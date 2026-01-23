@@ -605,15 +605,13 @@ impl RalphLoop {
         }
 
         // Clear writer and master - handle poisoned mutex gracefully
-        if let Ok(mut guard) = pty_writer.lock() {
-            *guard = None;
-        } else if let Err(poisoned) = pty_writer.lock() {
-            *poisoned.into_inner() = None;
+        match pty_writer.lock() {
+            Ok(mut guard) => *guard = None,
+            Err(poisoned) => *poisoned.into_inner() = None,
         }
-        if let Ok(mut guard) = pty_master.lock() {
-            *guard = None;
-        } else if let Err(poisoned) = pty_master.lock() {
-            *poisoned.into_inner() = None;
+        match pty_master.lock() {
+            Ok(mut guard) => *guard = None,
+            Err(poisoned) => *poisoned.into_inner() = None,
         }
 
         Ok(())
