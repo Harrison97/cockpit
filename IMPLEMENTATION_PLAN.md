@@ -259,7 +259,7 @@
   - `g`/`G` = top/bottom of history
   - `q` or `Esc` = exit search mode, return to focused mode
 
-- [ ] **11.5 Update footer hints for search mode**
+- [x] **11.5 Update footer hints for search mode**
   - Searching: "Type to search │ Enter: confirm │ Esc: cancel"
   - Navigating: "n/N: next/prev match │ j/k: scroll │ q: exit search"
 

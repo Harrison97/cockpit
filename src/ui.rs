@@ -609,7 +609,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let keybindings = match &app.search_mode {
         SearchMode::Searching(_) => "Type to search │ Enter: confirm │ Esc: cancel".to_string(),
         SearchMode::Navigating(_) => {
-            "n/N: next/prev match │ j/k: scroll │ q/Esc: exit search".to_string()
+            "n/N: next/prev │ j/k: scroll │ Ctrl+D/U: page │ g/G: top/bottom │ q: exit".to_string()
         }
         SearchMode::Off => {
             if app.output_focused {
