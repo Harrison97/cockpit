@@ -15,7 +15,7 @@
 
 ## Phase 2: Data Model
 
-- [ ] **2.1 Create agent.rs with AgentStatus enum**
+- [x] **2.1 Create agent.rs with AgentStatus enum**
   - Define AgentStatus: Running, Stopped, Paused
   - Implement Display trait for status text
   - Add method to get status color (for UI)

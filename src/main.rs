@@ -1,3 +1,5 @@
+mod agent;
+
 use std::io;
 
 use crossterm::{
