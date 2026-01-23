@@ -33,13 +33,20 @@ fn create_main_layout(area: Rect) -> (Rect, Rect, Rect) {
 
 /// Creates the horizontal split for main content: agent list and output pane
 ///
+/// Left pane: 20% of width but minimum 18 characters
+/// Right pane: remaining space
+///
 /// Returns a tuple of (agent_list_area, output_pane_area)
 fn create_content_layout(area: Rect) -> (Rect, Rect) {
+    // Calculate 20% of the area width, but enforce minimum of 18 chars
+    let twenty_percent = (area.width * 20) / 100;
+    let left_width = twenty_percent.max(18);
+
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(20), // Left pane: 20% width (agent list)
-            Constraint::Percentage(80), // Right pane: 80% width (output)
+            Constraint::Length(left_width), // Left pane: 20% width, min 18 chars
+            Constraint::Fill(1),            // Right pane: remaining space
         ])
         .split(area);
 
@@ -56,7 +63,12 @@ fn create_content_layout(area: Rect) -> (Rect, Rect) {
 /// - Blank line between agents
 fn render_agent_list(frame: &mut Frame, area: Rect, agents: &[Agent], selected_index: usize) {
     let block = Block::default()
-        .title("AGENTS")
+        .title(Span::styled(
+            "AGENTS",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::DarkGray));
@@ -198,15 +210,26 @@ fn render_output_pane(
         None => "Agent Output: (none)".to_string(),
     };
 
-    // Border color is brighter when focused
+    // Border and title color is brighter when focused
     let border_color = if output_focused {
         Color::Cyan
     } else {
         Color::DarkGray
     };
 
+    let title_color = if output_focused {
+        Color::Cyan
+    } else {
+        Color::White
+    };
+
     let block = Block::default()
-        .title(title)
+        .title(Span::styled(
+            title,
+            Style::default()
+                .fg(title_color)
+                .add_modifier(Modifier::BOLD),
+        ))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color));
@@ -281,11 +304,11 @@ fn render_header(frame: &mut Frame, area: Rect) {
     let timestamp = Local::now().format("%H:%M:%S").to_string();
 
     // Create the header line with title on left and timestamp on right
-    // We need to calculate padding to right-align the timestamp
-    let title = "GOD AGENT CONSOLE";
+    // Add 1 char left padding for visual alignment with content below
+    let title = " GOD AGENT CONSOLE";
     let available_width = area.width as usize;
 
-    // Build the line content: title + padding + timestamp
+    // Build the line content: title + padding + timestamp + right padding
     let padding_width = available_width.saturating_sub(title.len() + timestamp.len() + 2);
     let padding = " ".repeat(padding_width);
 
@@ -297,7 +320,8 @@ fn render_header(frame: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(padding),
-        Span::styled(timestamp, Style::default().fg(Color::White)),
+        Span::styled(&timestamp, Style::default().fg(Color::White)),
+        Span::raw(" "), // Right padding for symmetry
     ]);
 
     // Create block with bottom border only
@@ -317,9 +341,9 @@ fn render_header(frame: &mut Frame, area: Rect) {
 /// - Output focused: "j/k: scroll  Esc: back  Ctrl+d/u: page  q: quit"
 fn render_footer(frame: &mut Frame, area: Rect, output_focused: bool) {
     let hints = if output_focused {
-        "j/k: scroll  Esc: back  Ctrl+d/u: page  q: quit"
+        " j/k: scroll  Esc: back  Ctrl+d/u: page  q: quit"
     } else {
-        "j/k: navigate  Enter: focus  p: pause  r: resume  q: quit"
+        " j/k: navigate  Enter: focus  p: pause  r: resume  q: quit"
     };
 
     let footer = Paragraph::new(hints).style(Style::default().fg(Color::DarkGray));
