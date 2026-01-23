@@ -8,6 +8,34 @@ use ratatui::style::Color;
 use std::fmt;
 use std::time::Instant;
 
+/// Mock output lines for the Alpha agent (AI research theme)
+pub const ALPHA_OUTPUTS: &[&str] = &[
+    "Starting analysis loop...",
+    "Loading market data from cache",
+    "Analyzing RSI divergence patterns",
+    "Found 3 potential signals",
+    "Backtesting strategy_v12...",
+    "Results: Sharpe 2.1, MaxDD -12%, Win 64%",
+    "Generating improved strategy",
+    "Writing src/strategies/momentum_v13.rs",
+    "Running cargo test...",
+    "All tests passed (23/23)",
+    "Committing changes...",
+    "Iteration complete. Exiting.",
+];
+
+/// Mock output lines for the Gamma agent (data processing theme)
+pub const GAMMA_OUTPUTS: &[&str] = &[
+    "Initializing data pipeline",
+    "Fetching datasets from S3",
+    "Processing batch 1/10",
+    "Applying transformations",
+    "Validating schema integrity",
+    "Writing to parquet: data/processed/batch_001.parquet",
+    "Updating metadata index",
+    "Pipeline complete. 1.2GB processed.",
+];
+
 /// Status of an AI agent
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum AgentStatus {
@@ -96,4 +124,33 @@ impl Agent {
             self.status = AgentStatus::Running;
         }
     }
+}
+
+/// Creates mock agents for demonstration purposes
+///
+/// Returns 3 agents:
+/// - alpha: Running with initial research-themed output
+/// - beta: Stopped with empty output
+/// - gamma: Running with data processing output
+pub fn create_mock_agents() -> Vec<Agent> {
+    let mut alpha = Agent::new("alpha");
+    alpha.start();
+    alpha.iteration = 1;
+    // Add initial output lines for alpha
+    for line in ALPHA_OUTPUTS.iter().take(4) {
+        alpha.add_output(line);
+    }
+
+    let beta = Agent::new("beta");
+    // beta stays Stopped with no output
+
+    let mut gamma = Agent::new("gamma");
+    gamma.start();
+    gamma.iteration = 1;
+    // Add initial output lines for gamma
+    for line in GAMMA_OUTPUTS.iter().take(3) {
+        gamma.add_output(line);
+    }
+
+    vec![alpha, beta, gamma]
 }

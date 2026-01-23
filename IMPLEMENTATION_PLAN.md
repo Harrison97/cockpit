@@ -25,7 +25,7 @@
   - Implement new(), uptime_secs(), add_output()
   - Implement start(), stop(), pause(), resume() methods
 
-- [ ] **2.3 Add mock data generation**
+- [x] **2.3 Add mock data generation**
   - Create ALPHA_OUTPUTS and GAMMA_OUTPUTS constants with sample log lines
   - Create create_mock_agents() function returning 3 agents
   - Alpha: Running with initial output, Gamma: Running, Beta: Stopped
