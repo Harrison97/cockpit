@@ -102,6 +102,29 @@ impl App {
         self.scroll_offset = 0;
     }
 
+    /// Pauses the currently selected agent (if running)
+    pub fn pause_selected(&mut self) {
+        if let Some(agent) = self.selected_agent_mut() {
+            if agent.status == AgentStatus::Running {
+                agent.pause();
+            }
+        }
+    }
+
+    /// Resumes the currently selected agent (if paused)
+    pub fn resume_selected(&mut self) {
+        if let Some(agent) = self.selected_agent_mut() {
+            agent.resume();
+        }
+    }
+
+    /// Stops the currently selected agent
+    pub fn stop_selected(&mut self) {
+        if let Some(agent) = self.selected_agent_mut() {
+            agent.stop();
+        }
+    }
+
     /// Called each frame to update application state
     ///
     /// Updates running agents' mock output periodically (every ~2 seconds)
@@ -159,7 +182,19 @@ impl App {
                 self.select_last();
                 true
             }
-            // Other keybindings will be added in subsequent tasks
+            // Agent control keybindings
+            KeyCode::Char('p') => {
+                self.pause_selected();
+                true
+            }
+            KeyCode::Char('r') => {
+                self.resume_selected();
+                true
+            }
+            KeyCode::Char('s') => {
+                self.stop_selected();
+                true
+            }
             _ => false,
         }
     }

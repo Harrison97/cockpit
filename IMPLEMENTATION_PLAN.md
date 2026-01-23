@@ -83,7 +83,7 @@
   - g: select first agent
   - G: select last agent
 
-- [ ] **4.4 Implement agent control keybindings**
+- [x] **4.4 Implement agent control keybindings**
   - p: pause selected agent
   - r: resume selected agent
   - s: stop selected agent
