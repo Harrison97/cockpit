@@ -149,6 +149,8 @@ pub struct RalphLoop {
     pub project_path: PathBuf,
     /// The target repo root where commands are executed
     pub working_dir: PathBuf,
+    /// True for ralph loops (has PROMPT.md, auto-restarts), false for Claude instances
+    is_ralph_loop: bool,
     pid: Option<u32>,
     paused: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
@@ -159,10 +161,11 @@ pub struct RalphLoop {
 }
 
 impl RalphLoop {
-    pub fn new(project_path: PathBuf, working_dir: PathBuf) -> Self {
+    pub fn new(project_path: PathBuf, working_dir: PathBuf, is_ralph_loop: bool) -> Self {
         Self {
             project_path,
             working_dir,
+            is_ralph_loop,
             pid: None,
             paused: Arc::new(AtomicBool::new(false)),
             running: Arc::new(AtomicBool::new(false)),
@@ -204,6 +207,7 @@ impl RalphLoop {
 
     /// Start the ralph loop with PTY and auto-restart on idle.
     /// Sends raw terminal data through the channel for full TUI rendering.
+    /// For Claude instances (is_ralph_loop=false), runs a single session without auto-restart.
     pub fn start(
         &mut self,
         agent_name: String,
@@ -219,17 +223,23 @@ impl RalphLoop {
             return Err(LoopError::ProjectNotFound(path));
         }
 
-        let prompt_path = path.join("PROMPT.md");
-        if !prompt_path.exists() {
-            return Err(LoopError::PromptNotFound);
-        }
+        // Only require PROMPT.md for ralph loops, not Claude instances
+        let prompt_content =
+            if self.is_ralph_loop {
+                let prompt_path = path.join("PROMPT.md");
+                if !prompt_path.exists() {
+                    return Err(LoopError::PromptNotFound);
+                }
+                Some(std::fs::read_to_string(&prompt_path).map_err(|e| {
+                    LoopError::SpawnFailed(format!("Failed to read PROMPT.md: {}", e))
+                })?)
+            } else {
+                None
+            };
 
         if !is_claude_installed() {
             return Err(LoopError::ClaudeNotFound);
         }
-
-        let prompt_content = std::fs::read_to_string(&prompt_path)
-            .map_err(|e| LoopError::SpawnFailed(format!("Failed to read PROMPT.md: {}", e)))?;
 
         self.running.store(true, Ordering::SeqCst);
         self.paused.store(false, Ordering::SeqCst);
@@ -241,6 +251,7 @@ impl RalphLoop {
         let project_path = self.project_path.clone();
         let working_dir = self.working_dir.clone();
         let pty_writer = self.pty_writer.clone();
+        let is_ralph_loop = self.is_ralph_loop;
 
         let handle = std::thread::spawn(move || {
             Self::run_loop(
@@ -253,6 +264,7 @@ impl RalphLoop {
                 agent_name,
                 tx,
                 pty_writer,
+                is_ralph_loop,
             );
         });
 
@@ -266,10 +278,11 @@ impl RalphLoop {
         last_activity: Arc<Mutex<Instant>>,
         project_path: PathBuf,
         working_dir: PathBuf,
-        prompt_content: String,
+        prompt_content: Option<String>,
         agent_name: String,
         tx: mpsc::Sender<TerminalData>,
         pty_writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
+        is_ralph_loop: bool,
     ) {
         while running.load(Ordering::SeqCst) {
             // Wait until not paused before starting a new iteration
@@ -284,13 +297,14 @@ impl RalphLoop {
             let result = Self::spawn_claude_iteration(
                 &project_path,
                 &working_dir,
-                &prompt_content,
+                prompt_content.as_deref(),
                 &agent_name,
                 &tx,
                 &running,
                 &paused,
                 &last_activity,
                 &pty_writer,
+                is_ralph_loop,
             );
 
             if let Err(e) = result {
@@ -299,7 +313,22 @@ impl RalphLoop {
                     agent_name.clone(),
                     error_msg.into_bytes(),
                 ));
+                // For Claude instances, don't retry on error - just stop
+                if !is_ralph_loop {
+                    running.store(false, Ordering::SeqCst);
+                    break;
+                }
                 std::thread::sleep(Duration::from_secs(2));
+            }
+
+            // For Claude instances, don't auto-restart - set running to false and exit
+            if !is_ralph_loop {
+                running.store(false, Ordering::SeqCst);
+                let _ = tx.blocking_send(TerminalData::new(
+                    agent_name.clone(),
+                    b"\r\n[Exited]\r\n".to_vec(),
+                ));
+                break;
             }
 
             if running.load(Ordering::SeqCst) && !paused.load(Ordering::SeqCst) {
@@ -315,13 +344,14 @@ impl RalphLoop {
     fn spawn_claude_iteration(
         project_path: &Path,
         working_dir: &Path,
-        prompt_content: &str,
+        prompt_content: Option<&str>,
         agent_name: &str,
         tx: &mpsc::Sender<TerminalData>,
         running: &Arc<AtomicBool>,
         paused: &Arc<AtomicBool>,
         last_activity: &Arc<Mutex<Instant>>,
         pty_writer: &Arc<Mutex<Option<Box<dyn Write + Send>>>>,
+        is_ralph_loop: bool,
     ) -> Result<(), LoopError> {
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -333,13 +363,19 @@ impl RalphLoop {
             })
             .map_err(|e| LoopError::PtyError(e.to_string()))?;
 
-        // Use absolute path to PROMPT.md so we can run claude in working_dir
-        let prompt_path = project_path.join("PROMPT.md");
-        let prompt_path_str = prompt_path.to_string_lossy();
-        let cmd_str = format!(
-            "cat '{}' | claude --dangerously-skip-permissions",
-            prompt_path_str
-        );
+        // Build the command based on agent type
+        let cmd_str = if is_ralph_loop {
+            // Ralph loop: pipe PROMPT.md to claude
+            let prompt_path = project_path.join("PROMPT.md");
+            let prompt_path_str = prompt_path.to_string_lossy();
+            format!(
+                "cat '{}' | claude --dangerously-skip-permissions",
+                prompt_path_str
+            )
+        } else {
+            // Claude instance: run claude directly without piping
+            "claude --dangerously-skip-permissions".to_string()
+        };
 
         let mut cmd = CommandBuilder::new("bash");
         cmd.arg("-c");
@@ -366,7 +402,7 @@ impl RalphLoop {
         // Store writer for input forwarding
         *pty_writer.lock().unwrap() = Some(writer);
 
-        // prompt_content was already validated but we pipe from file directly
+        // prompt_content was already validated but we pipe from file directly for ralph loops
         let _ = prompt_content;
 
         *last_activity.lock().unwrap() = Instant::now();
@@ -411,17 +447,20 @@ impl RalphLoop {
                 break;
             }
 
-            let idle_duration = last_activity.lock().unwrap().elapsed();
-            if !paused.load(Ordering::SeqCst)
-                && idle_duration > Duration::from_secs(IDLE_TIMEOUT_SECS)
-            {
-                let _ = tx.blocking_send(TerminalData::new(
-                    agent_name.to_string(),
-                    format!("\r\n[Idle for {}s, restarting...]\r\n", IDLE_TIMEOUT_SECS)
-                        .into_bytes(),
-                ));
-                let _ = child.kill();
-                break;
+            // Only apply idle timeout for ralph loops, not Claude instances
+            if is_ralph_loop {
+                let idle_duration = last_activity.lock().unwrap().elapsed();
+                if !paused.load(Ordering::SeqCst)
+                    && idle_duration > Duration::from_secs(IDLE_TIMEOUT_SECS)
+                {
+                    let _ = tx.blocking_send(TerminalData::new(
+                        agent_name.to_string(),
+                        format!("\r\n[Idle for {}s, restarting...]\r\n", IDLE_TIMEOUT_SECS)
+                            .into_bytes(),
+                    ));
+                    let _ = child.kill();
+                    break;
+                }
             }
 
             // Check for data with timeout

@@ -191,7 +191,7 @@
   - When prompt is empty, set agent_type to `ClaudeInstance`
   - Update UI labels: show "Claude Instance" for prompt-less agents
 
-- [ ] **9.3 Modify RalphLoop for Claude instances**
+- [x] **9.3 Modify RalphLoop for Claude instances**
   - Add `is_ralph_loop: bool` field to `RalphLoop`
   - For Claude instances: spawn `claude --dangerously-skip-permissions` directly (no cat pipe)
   - For Claude instances: do NOT auto-restart on idle timeout

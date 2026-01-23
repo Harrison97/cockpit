@@ -171,7 +171,8 @@ impl Agent {
                 .working_dir
                 .clone()
                 .unwrap_or_else(|| project_path.clone());
-            let mut ralph_loop = RalphLoop::new(project_path.clone(), working_dir);
+            let is_ralph_loop = self.agent_type == AgentType::RalphLoop;
+            let mut ralph_loop = RalphLoop::new(project_path.clone(), working_dir, is_ralph_loop);
 
             let mut last_error = None;
             for attempt in 0..Self::MAX_SPAWN_RETRIES {
