@@ -4,9 +4,10 @@
 
 #![allow(dead_code)] // Items will be used as more features are implemented
 
+use rand::Rng;
 use ratatui::style::Color;
 use std::fmt;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Mock output lines for the Alpha agent (AI research theme)
 pub const ALPHA_OUTPUTS: &[&str] = &[
@@ -74,6 +75,10 @@ pub struct Agent {
     pub iteration: u32,
     /// Index tracking which mock output line to add next
     pub mock_output_index: usize,
+    /// Count of output lines since last iteration increment
+    pub lines_since_iteration: u32,
+    /// When to next add mock output (for randomized intervals)
+    pub next_output_at: Instant,
 }
 
 impl Agent {
@@ -88,7 +93,25 @@ impl Agent {
             output: Vec::new(),
             iteration: 0,
             mock_output_index: 0,
+            lines_since_iteration: 0,
+            next_output_at: Instant::now(),
         }
+    }
+
+    /// Generates a random delay between 2-5 seconds
+    fn random_output_delay() -> Duration {
+        let mut rng = rand::thread_rng();
+        Duration::from_millis(rng.gen_range(2000..=5000))
+    }
+
+    /// Schedules the next output at a random time 2-5 seconds from now
+    pub fn schedule_next_output(&mut self) {
+        self.next_output_at = Instant::now() + Self::random_output_delay();
+    }
+
+    /// Returns true if it's time to add the next output line
+    pub fn is_output_due(&self) -> bool {
+        self.status == AgentStatus::Running && Instant::now() >= self.next_output_at
     }
 
     /// Returns the uptime in seconds, or 0 if the agent has no start time
@@ -108,6 +131,7 @@ impl Agent {
     pub fn start(&mut self) {
         self.status = AgentStatus::Running;
         self.start_time = Some(Instant::now());
+        self.schedule_next_output();
     }
 
     /// Stops the agent, setting status to Stopped and clearing start time
@@ -138,18 +162,30 @@ impl Agent {
         }
     }
 
-    /// Adds the next mock output line if available
+    /// Adds the next mock output line, cycling through the output list
     ///
-    /// Returns true if a line was added, false if we've reached the end
-    pub fn add_next_mock_output(&mut self) -> bool {
+    /// Increments the iteration counter every ~10 lines.
+    /// Schedules the next output at a random interval 2-5 seconds from now.
+    pub fn add_next_mock_output(&mut self) {
         let outputs = self.mock_outputs();
-        if self.mock_output_index < outputs.len() {
-            self.add_output(outputs[self.mock_output_index]);
-            self.mock_output_index += 1;
-            true
-        } else {
-            false
+        if outputs.is_empty() {
+            return;
         }
+
+        // Get the next output line (cycling)
+        let line = outputs[self.mock_output_index % outputs.len()];
+        self.add_output(line);
+        self.mock_output_index += 1;
+
+        // Track lines and increment iteration every ~10 lines
+        self.lines_since_iteration += 1;
+        if self.lines_since_iteration >= 10 {
+            self.iteration += 1;
+            self.lines_since_iteration = 0;
+        }
+
+        // Schedule the next output
+        self.schedule_next_output();
     }
 }
 
@@ -168,6 +204,7 @@ pub fn create_mock_agents() -> Vec<Agent> {
         alpha.add_output(line);
     }
     alpha.mock_output_index = 4; // Next line to add
+    alpha.lines_since_iteration = 4; // Track initial lines
 
     let beta = Agent::new("beta");
     // beta stays Stopped with no output
@@ -180,6 +217,7 @@ pub fn create_mock_agents() -> Vec<Agent> {
         gamma.add_output(line);
     }
     gamma.mock_output_index = 3; // Next line to add
+    gamma.lines_since_iteration = 3; // Track initial lines
 
     vec![alpha, beta, gamma]
 }

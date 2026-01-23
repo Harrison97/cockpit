@@ -185,20 +185,15 @@ impl App {
 
     /// Called each frame to update application state
     ///
-    /// Updates running agents' mock output periodically (every ~2 seconds)
+    /// Updates running agents' mock output at randomized intervals (2-5 seconds per agent)
     pub fn tick(&mut self) {
         self.frame_count += 1;
+        self.last_tick = Instant::now();
 
-        // Update mock output approximately every 2 seconds (120 frames at 60 FPS)
-        // Only check if enough time has passed since last tick
-        if self.last_tick.elapsed().as_millis() >= 2000 {
-            self.last_tick = Instant::now();
-
-            // Update all running agents
-            for agent in &mut self.agents {
-                if agent.status == AgentStatus::Running {
-                    agent.add_next_mock_output();
-                }
+        // Check each agent for output updates (each has its own random timer)
+        for agent in &mut self.agents {
+            if agent.is_output_due() {
+                agent.add_next_mock_output();
             }
         }
     }
