@@ -203,8 +203,10 @@ impl RalphLoop {
             .flush()
             .map_err(|e| LoopError::StdinWriteFailed(e.to_string()))?;
 
-        // Update activity on input too
-        *self.last_activity.lock().unwrap() = Instant::now();
+        // Update activity on input too (ignore poisoning - this is optional)
+        if let Ok(mut guard) = self.last_activity.lock() {
+            *guard = Instant::now();
+        }
 
         Ok(())
     }
@@ -265,7 +267,10 @@ impl RalphLoop {
 
         self.running.store(true, Ordering::SeqCst);
         self.paused.store(false, Ordering::SeqCst);
-        *self.last_activity.lock().unwrap() = Instant::now();
+        // Reset activity timer (ignore poisoning - will be set again in thread)
+        if let Ok(mut guard) = self.last_activity.lock() {
+            *guard = Instant::now();
+        }
 
         let running = self.running.clone();
         let paused = self.paused.clone();
@@ -584,7 +589,10 @@ impl RalphLoop {
 
         self.paused.store(false, Ordering::SeqCst);
         // Reset activity timer so we don't immediately trigger idle timeout
-        *self.last_activity.lock().unwrap() = Instant::now();
+        // (ignore poisoning - idle timeout check will handle it)
+        if let Ok(mut guard) = self.last_activity.lock() {
+            *guard = Instant::now();
+        }
 
         Ok(())
     }
@@ -594,8 +602,13 @@ impl RalphLoop {
         self.paused.store(false, Ordering::SeqCst);
 
         // Clear writer and master to unblock any writes
-        *self.pty_writer.lock().unwrap() = None;
-        *self.pty_master.lock().unwrap() = None;
+        // (ignore poisoning - we're shutting down anyway)
+        if let Ok(mut guard) = self.pty_writer.lock() {
+            *guard = None;
+        }
+        if let Ok(mut guard) = self.pty_master.lock() {
+            *guard = None;
+        }
 
         // Wait for reader thread to exit
         // The thread checks `running` every 100ms and kills the child process when it sees false
