@@ -13,7 +13,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::agent::Agent;
+use crate::agent::{Agent, AgentStatus};
 
 /// Creates the main vertical layout: header, main content, footer
 ///
@@ -178,6 +178,101 @@ fn render_agent_list(frame: &mut Frame, area: Rect, agents: &[Agent], selected_i
     frame.render_widget(paragraph, inner_area);
 }
 
+/// Renders the output pane showing the selected agent's output
+///
+/// Shows:
+/// - Title: "Agent Output: {agent_name}"
+/// - Output lines with timestamps
+/// - Scrollable content based on scroll_offset
+/// - Brighter border when focused
+fn render_output_pane(
+    frame: &mut Frame,
+    area: Rect,
+    agent: Option<&Agent>,
+    scroll_offset: usize,
+    output_focused: bool,
+) {
+    // Determine title based on selected agent
+    let title = match agent {
+        Some(a) => format!("Agent Output: {}", a.name),
+        None => "Agent Output: (none)".to_string(),
+    };
+
+    // Border color is brighter when focused
+    let border_color = if output_focused {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color));
+
+    let inner_area = block.inner(area);
+    frame.render_widget(block, area);
+
+    // If no agent selected, show empty pane
+    let agent = match agent {
+        Some(a) => a,
+        None => return,
+    };
+
+    // Build output lines with timestamps
+    // For mock purposes, we generate timestamps based on current time minus offset
+    let now = Local::now();
+    let mut lines: Vec<Line> = Vec::new();
+
+    for (i, output_line) in agent.output.iter().enumerate() {
+        // Generate a mock timestamp (decrement by 3 seconds per line from current time)
+        let line_offset = (agent.output.len().saturating_sub(i + 1)) * 3;
+        let line_time = now - chrono::Duration::seconds(line_offset as i64);
+        let timestamp = line_time.format("%H:%M:%S").to_string();
+
+        let line = Line::from(vec![
+            Span::styled(
+                format!("[{}] ", timestamp),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(output_line, Style::default().fg(Color::White)),
+        ]);
+        lines.push(line);
+    }
+
+    // If agent is running, show a cursor prompt
+    if agent.status == AgentStatus::Running {
+        let timestamp = now.format("%H:%M:%S").to_string();
+        let cursor_line = Line::from(vec![
+            Span::styled(
+                format!("[{}] ", timestamp),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(">", Style::default().fg(Color::White)),
+        ]);
+        lines.push(cursor_line);
+    }
+
+    // Apply scroll offset - calculate visible range
+    let visible_height = inner_area.height as usize;
+    let total_lines = lines.len();
+
+    // Clamp scroll offset to valid range
+    let max_scroll = total_lines.saturating_sub(visible_height);
+    let effective_offset = scroll_offset.min(max_scroll);
+
+    // Get the visible slice of lines
+    let visible_lines: Vec<Line> = lines
+        .into_iter()
+        .skip(effective_offset)
+        .take(visible_height)
+        .collect();
+
+    let paragraph = Paragraph::new(visible_lines);
+    frame.render_widget(paragraph, inner_area);
+}
+
 /// Renders the header with title and timestamp
 ///
 /// Shows "GOD AGENT CONSOLE" on the left (cyan, bold) and current time on the right.
@@ -244,9 +339,18 @@ pub fn render(
     // Render agent list
     render_agent_list(frame, agent_list_area, agents, selected_index);
 
-    // TODO: Render output pane (task 3.5)
+    // Render output pane for selected agent
+    let selected_agent = agents.get(selected_index);
+    render_output_pane(
+        frame,
+        output_area,
+        selected_agent,
+        scroll_offset,
+        output_focused,
+    );
+
     // TODO: Render footer (task 3.6)
 
     // Suppress unused variable warnings for now
-    let _ = (output_area, footer_area, scroll_offset, output_focused);
+    let _ = footer_area;
 }

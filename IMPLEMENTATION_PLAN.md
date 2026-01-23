@@ -53,7 +53,7 @@
   - Highlight selected agent with cyan background
   - Status colors: green=running, red=stopped, yellow=paused
 
-- [ ] **3.5 Implement output pane rendering**
+- [x] **3.5 Implement output pane rendering**
   - Block with title "Agent Output: {name}" and full border
   - Display output lines from selected agent
   - Each line prefixed with timestamp
