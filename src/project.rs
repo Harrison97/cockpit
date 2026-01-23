@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Represents a ralph project directory structure.
@@ -63,5 +64,46 @@ impl RalphProject {
     /// Returns true if PROMPT.md exists in the directory.
     pub fn is_ralph_project(path: &Path) -> bool {
         path.join("PROMPT.md").exists()
+    }
+
+    /// Create a new ralph project at the given path.
+    ///
+    /// Creates the directory structure and writes initial files:
+    /// - PROMPT.md with provided content
+    /// - IMPLEMENTATION_PLAN.md with template
+    /// - specs/ directory
+    pub fn create(
+        path: PathBuf,
+        prompt_content: &str,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        // Create directory if it doesn't exist
+        if !path.exists() {
+            fs::create_dir_all(&path)?;
+        } else if !path.is_dir() {
+            return Err(format!("Path exists but is not a directory: {}", path.display()).into());
+        }
+
+        // Write PROMPT.md with provided content
+        let prompt_path = path.join("PROMPT.md");
+        fs::write(&prompt_path, prompt_content)?;
+
+        // Create IMPLEMENTATION_PLAN.md with template
+        let plan_path = path.join("IMPLEMENTATION_PLAN.md");
+        let plan_content = "# Implementation Plan\n\n## Tasks\n\n- [ ] First task goes here\n";
+        fs::write(&plan_path, plan_content)?;
+
+        // Create specs/ directory
+        let specs_dir = path.join("specs");
+        fs::create_dir_all(&specs_dir)?;
+
+        let instructions_path = path.join("PRIORITY_INSTRUCTIONS.md");
+
+        Ok(Self {
+            root: path,
+            prompt_path,
+            plan_path,
+            specs_dir,
+            instructions_path,
+        })
     }
 }
