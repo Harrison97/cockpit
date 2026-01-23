@@ -31,12 +31,12 @@
 
 ## Phase 2: Subprocess Management
 
-- [ ] **2.1 Implement RalphLoop struct**
+- [x] **2.1 Implement RalphLoop struct**
   - Fields: project_path, child (Option<Child>), pid (Option<u32>)
   - Method: `new(project_path: PathBuf) -> Self`
   - Method: `is_running(&self) -> bool`
 
-- [ ] **2.2 Implement subprocess spawning**
+- [x] **2.2 Implement subprocess spawning**
   - Method: `start(&mut self, tx: mpsc::Sender<OutputLine>) -> Result<()>`
   - Spawn bash with: `cd {path} && while :; do cat PROMPT.md | claude -p --dangerously-skip-permissions 2>&1; sleep 1; done`
   - Configure stdout pipe for capture

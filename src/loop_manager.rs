@@ -1,5 +1,9 @@
+use nix::libc;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::time::Instant;
+use tokio::process::Command;
+use tokio::sync::mpsc;
 
 /// A line of output from a ralph loop subprocess.
 /// Sent from the async reader task to the main app via mpsc channel.
@@ -61,5 +65,66 @@ impl RalphLoop {
     /// Check if the subprocess is still alive.
     pub fn is_running(&self) -> bool {
         self.child.is_some()
+    }
+
+    /// Start the ralph loop subprocess.
+    ///
+    /// Spawns bash with the ralph loop command and configures stdout capture.
+    /// The agent_name is used to tag output lines sent through the channel.
+    pub fn start(
+        &mut self,
+        agent_name: String,
+        tx: mpsc::Sender<OutputLine>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if self.is_running() {
+            return Err("Loop is already running".into());
+        }
+
+        let path = self.project_path.clone();
+        let path_str = path.to_string_lossy();
+
+        // Build the bash command that runs the ralph loop
+        let cmd = format!(
+            "cd {} && while :; do cat PROMPT.md | claude -p --dangerously-skip-permissions 2>&1; sleep 1; done",
+            path_str
+        );
+
+        // Spawn bash with process group for signal handling
+        let mut command = Command::new("bash");
+        command
+            .args(["-c", &cmd])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()); // stderr merged via 2>&1 in bash command
+
+        // Set process group to 0 so the child becomes its own process group leader
+        // This allows us to send signals to the entire group (bash + claude)
+        unsafe {
+            command.pre_exec(|| {
+                // Create new process group with this process as leader
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+
+        let mut child = command.spawn()?;
+
+        // Extract PID and PGID
+        let pid = child.id();
+        self.pid = pid;
+        // PGID equals PID when we create a new process group
+        self.pgid = pid.map(|p| p as i32);
+
+        // Take stdout for the async reader (to be implemented in 2.3)
+        let _stdout = child.stdout.take();
+
+        // Store the child handle
+        self.child = Some(child);
+
+        // Note: The async output reader task will be spawned in task 2.3
+        // For now, we just drop the stdout (and tx is unused)
+        let _ = tx;
+        let _ = agent_name;
+
+        Ok(())
     }
 }
