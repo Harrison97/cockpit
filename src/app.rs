@@ -312,20 +312,26 @@ impl App {
 
         let prompt_content = self.input_buffer.clone();
 
+        // Determine agent type: empty prompt = ClaudeInstance, otherwise RalphLoop
+        let agent_type = if prompt_content.trim().is_empty() {
+            AgentType::ClaudeInstance
+        } else {
+            AgentType::RalphLoop
+        };
+
         let project_path = base_path.join(".agents").join(&agent_name);
         let working_dir = base_path.clone();
 
         match RalphProject::create(project_path.clone(), &prompt_content) {
             Ok(_project) => {
-                let agent = Agent::with_project(
-                    &agent_name,
-                    project_path,
-                    working_dir,
-                    AgentType::RalphLoop,
-                );
+                let agent = Agent::with_project(&agent_name, project_path, working_dir, agent_type);
                 self.agents.push(agent);
                 self.selected_index = self.agents.len() - 1;
-                self.status_message = Some(format!("Created loop: {}", agent_name));
+                let type_label = match agent_type {
+                    AgentType::ClaudeInstance => "Claude instance",
+                    AgentType::RalphLoop => "Ralph loop",
+                };
+                self.status_message = Some(format!("Created {}: {}", type_label, agent_name));
                 self.save_state();
             }
             Err(e) => {

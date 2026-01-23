@@ -186,7 +186,7 @@
   - Update `Agent::with_project()` to accept agent_type parameter
   - Update persistence to save/load agent_type
 
-- [ ] **9.2 Support prompt-less agent creation**
+- [x] **9.2 Support prompt-less agent creation**
   - Modify `RalphProject::create()` to skip PROMPT.md when prompt is empty
   - When prompt is empty, set agent_type to `ClaudeInstance`
   - Update UI labels: show "Claude Instance" for prompt-less agents

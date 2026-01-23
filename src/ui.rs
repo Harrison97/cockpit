@@ -12,7 +12,7 @@ use ratatui::{
 };
 use tui_term::widget::PseudoTerminal;
 
-use crate::agent::{Agent, AgentStatus};
+use crate::agent::{Agent, AgentStatus, AgentType};
 use crate::app::{App, InputMode};
 
 fn create_main_layout(area: Rect) -> (Rect, Rect, Rect) {
@@ -156,18 +156,21 @@ fn render_agent_list(frame: &mut Frame, area: Rect, agents: &[Agent], selected_i
             lines.push(Line::from(Span::styled(info_text, info_style)));
         }
 
-        // Line 4: Iteration count
-        let loop_text = format!("  Loop: #{}", agent.iteration);
-        let loop_style = if is_selected {
+        // Line 4: Type indicator or iteration count
+        let type_text = match agent.agent_type {
+            AgentType::ClaudeInstance => "  Claude Instance".to_string(),
+            AgentType::RalphLoop => format!("  Loop: #{}", agent.iteration),
+        };
+        let type_style = if is_selected {
             Style::default().fg(Color::Black).bg(Color::Cyan)
         } else {
             Style::default().fg(Color::DarkGray)
         };
         if is_selected {
-            let padded_loop = format!("{:width$}", loop_text, width = inner_area.width as usize);
-            lines.push(Line::from(Span::styled(padded_loop, loop_style)));
+            let padded_type = format!("{:width$}", type_text, width = inner_area.width as usize);
+            lines.push(Line::from(Span::styled(padded_type, type_style)));
         } else {
-            lines.push(Line::from(Span::styled(loop_text, loop_style)));
+            lines.push(Line::from(Span::styled(type_text, type_style)));
         }
 
         // Line 5: Working directory (the target repo)

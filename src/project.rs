@@ -71,7 +71,7 @@ impl RalphProject {
     /// Create a new ralph project at the given path.
     ///
     /// Creates the directory structure and writes initial files:
-    /// - PROMPT.md with provided content
+    /// - PROMPT.md with provided content (skipped if empty - creates a Claude instance)
     /// - IMPLEMENTATION_PLAN.md with template
     /// - specs/ directory
     pub fn create(
@@ -85,9 +85,13 @@ impl RalphProject {
             return Err(format!("Path exists but is not a directory: {}", path.display()).into());
         }
 
-        // Write PROMPT.md with provided content
         let prompt_path = path.join("PROMPT.md");
-        fs::write(&prompt_path, prompt_content)?;
+
+        // Only write PROMPT.md if content is provided (non-empty)
+        // Empty prompt = Claude instance (no prompt file)
+        if !prompt_content.trim().is_empty() {
+            fs::write(&prompt_path, prompt_content)?;
+        }
 
         // Create IMPLEMENTATION_PLAN.md with template
         let plan_path = path.join("IMPLEMENTATION_PLAN.md");
