@@ -6,6 +6,7 @@
 
 use crate::agent::{create_demo_agents, Agent, AgentStatus};
 use crate::loop_manager::OutputLine;
+use crate::persistence::{save_state, LoopState, PersistedState};
 use crate::project::RalphProject;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -157,6 +158,9 @@ impl App {
                 if let Err(e) = agent.pause() {
                     // Store error for display (will be implemented later)
                     eprintln!("Failed to pause agent: {}", e);
+                } else {
+                    // Save state after status change
+                    self.save_state();
                 }
             }
         }
@@ -169,6 +173,9 @@ impl App {
                 if let Err(e) = agent.resume() {
                     // Store error for display (will be implemented later)
                     eprintln!("Failed to resume agent: {}", e);
+                } else {
+                    // Save state after status change
+                    self.save_state();
                 }
             }
         }
@@ -180,7 +187,10 @@ impl App {
         if let Some(agent) = self.selected_agent_mut() {
             if agent.status == AgentStatus::Stopped {
                 // Ignore errors for now - will be properly handled later
-                let _ = agent.start(tx);
+                if agent.start(tx).is_ok() {
+                    // Save state after status change
+                    self.save_state();
+                }
             }
         }
     }
@@ -199,6 +209,8 @@ impl App {
                 });
             }
         }
+        // Save state after stopping (outside the borrow)
+        self.save_state();
     }
 
     /// Toggles focus between agent list and output pane
@@ -407,6 +419,9 @@ impl App {
                 self.pinned_to_bottom = true;
 
                 self.status_message = Some(format!("Created loop: {}", name));
+
+                // Save state after creating a new loop
+                self.save_state();
             }
             Err(e) => {
                 self.status_message = Some(format!("Failed to create project: {}", e));
@@ -641,6 +656,32 @@ You are an autonomous agent running in a loop. Each iteration:
 - Keep changes focused and minimal
 "#
     .to_string()
+}
+
+impl App {
+    /// Saves the current state to disk
+    ///
+    /// Collects state from all agents with project paths and persists it.
+    /// Logs errors but does not propagate them (save failures are not fatal).
+    pub fn save_state(&self) {
+        let mut state = PersistedState::new();
+
+        for agent in &self.agents {
+            // Only persist agents that have a project path
+            if let Some(ref project_path) = agent.project_path {
+                state.upsert_loop(LoopState {
+                    name: agent.name.clone(),
+                    project_path: project_path.clone(),
+                    last_iteration: agent.iteration,
+                });
+            }
+        }
+
+        if let Err(e) = save_state(&state) {
+            // Log the error but don't crash - persistence is best-effort
+            eprintln!("Failed to save state: {}", e);
+        }
+    }
 }
 
 impl Default for App {

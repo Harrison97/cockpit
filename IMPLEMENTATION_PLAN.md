@@ -131,7 +131,7 @@
   - Define state file path: `~/.cockpit/state.json`
   - Define log directory: `~/.cockpit/logs/`
 
-- [ ] **6.2 Implement state saving**
+- [x] **6.2 Implement state saving**
   - Struct: `PersistedState { loops: Vec<LoopState> }`
   - Struct: `LoopState { name, project_path, last_iteration }`
   - Save on loop creation and status changes
