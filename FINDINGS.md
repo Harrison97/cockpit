@@ -1,5 +1,26 @@
 # Audit Findings
 
+## 2026-01-23 - Hardening Loop Iteration 6
+
+### SHOULD FIX (Completed this iteration)
+
+- [x] **scroll_offset u16 truncation for large scrollback buffers**
+  - Location: `src/agent.rs:181` (scroll_offset field definition)
+  - Risk: scroll_offset was u16 (max 65,535) but SCROLLBACK_SIZE is 100,000 lines.
+    When users tried to scroll to the top of a large buffer (>65K lines), the value would
+    truncate, preventing access to oldest history content.
+  - Affected locations: agent.rs lines 389, 405, 430, 828
+  - Fix: Changed scroll_offset from u16 to u32 (max ~4 billion, well beyond 100K limit)
+  - Note: u32 is sufficient for any reasonable scrollback size; u64/usize would be overkill
+
+### Verification performed:
+- Code formatting: `cargo fmt` - PASS
+- Lint checks: `cargo clippy -- -D warnings` - PASS
+- Build: `cargo build` - PASS
+- Tests: `cargo test` - PASS (4 tests)
+
+---
+
 ## 2026-01-23 - Hardening Loop Iteration 5
 
 ### Audit Summary

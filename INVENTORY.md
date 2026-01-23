@@ -8,13 +8,13 @@ Last updated: 2026-01-23
 | ---------------- | ----- | --------------------------------------------------- |
 | main.rs          | 164   | Entry point, event loop, terminal setup, panic hook |
 | app.rs           | 1188  | Application state, input handling, search mode      |
-| agent.rs         | 846   | Agent struct, terminal buffer, lifecycle management |
+| agent.rs         | 847   | Agent struct, terminal buffer, lifecycle management |
 | loop_manager.rs  | 699   | PTY spawning, process control, output capture       |
 | ui.rs            | 972   | Ratatui rendering, search highlighting              |
 | persistence.rs   | 141   | JSON state serialization/deserialization            |
 | project.rs       | 185   | Ralph project file operations                       |
 
-**Total: 4195 lines**
+**Total: 4196 lines**
 
 ## External Dependencies
 

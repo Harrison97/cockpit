@@ -178,7 +178,8 @@ pub struct Agent {
     /// Type of agent: RalphLoop or ClaudeInstance
     pub agent_type: AgentType,
     /// Scroll offset for terminal pane (0 = bottom, positive = scrolled up)
-    pub scroll_offset: u16,
+    /// Uses u32 to support scrollback buffers larger than 65535 lines
+    pub scroll_offset: u32,
     /// Last known terminal size (rows, cols) for resize optimization
     last_size: (u16, u16),
     /// Process readiness state for blocking input during transitions
@@ -383,10 +384,10 @@ impl Agent {
                 term.set_scrollback(0);
 
                 let lines_added = new_max.saturating_sub(old_max);
-                let new_offset = self.scroll_offset.saturating_add(lines_added as u16);
+                let new_offset = self.scroll_offset.saturating_add(lines_added as u32);
 
                 // Allow scrolling up to the full scrollback size
-                self.scroll_offset = new_offset.min(new_max as u16);
+                self.scroll_offset = new_offset.min(new_max as u32);
             }
         }
     }
@@ -401,8 +402,8 @@ impl Agent {
             // Allow scrolling up to the full scrollback size
             let new_offset = self
                 .scroll_offset
-                .saturating_add(lines)
-                .min(scrollback_max as u16);
+                .saturating_add(lines as u32)
+                .min(scrollback_max as u32);
             self.scroll_offset = new_offset;
             // Restore scrollback to 0 (rendering will set it appropriately)
             term.set_scrollback(0);
@@ -411,7 +412,7 @@ impl Agent {
 
     /// Scroll down by the given number of lines (towards bottom)
     pub fn scroll_down(&mut self, lines: u16) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+        self.scroll_offset = self.scroll_offset.saturating_sub(lines as u32);
     }
 
     /// Reset scroll to bottom (follow output)
@@ -427,7 +428,7 @@ impl Agent {
             let scrollback_max = term.screen().scrollback();
 
             // Allow scrolling to the full scrollback size
-            self.scroll_offset = scrollback_max as u16;
+            self.scroll_offset = scrollback_max as u32;
             // Restore scrollback to 0 (rendering will set it appropriately)
             term.set_scrollback(0);
         }
@@ -825,7 +826,7 @@ impl Agent {
                 scrollback_max as isize - absolute_row as isize + center_offset as isize;
             let new_offset = ideal_offset.max(0).min(scrollback_max as isize) as usize;
 
-            self.scroll_offset = new_offset as u16;
+            self.scroll_offset = new_offset as u32;
             // Restore scrollback to 0 (rendering will set it appropriately)
             term.set_scrollback(0);
         }
