@@ -5,6 +5,7 @@ You are building a CLI tool called "Cockpit" for creating, deploying, observing,
 ## What is a Ralph Loop?
 
 A ralph loop is a bash loop that continuously runs Claude Code:
+
 ```bash
 while :; do cat PROMPT.md | claude -p --dangerously-skip-permissions; done
 ```

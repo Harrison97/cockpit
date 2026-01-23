@@ -1,14 +1,10 @@
 //! Application state for the God Agent Console
-//!
-//! This module contains the App struct which holds all application state.
 
-#![allow(dead_code)] // Methods will be used as more features are implemented
+#![allow(dead_code)]
 
 use crate::agent::{Agent, AgentStatus};
-use crate::loop_manager::{IterationBoundary, IterationDetector, OutputLine};
-use crate::persistence::{
-    append_to_log, load_recent_log, load_state, save_state, LoopState, PersistedState,
-};
+use crate::loop_manager::TerminalData;
+use crate::persistence::{load_state, save_state, LoopState, PersistedState};
 use crate::project::RalphProject;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -17,102 +13,65 @@ use tokio::sync::mpsc;
 /// Input mode determines what kind of input the user is currently providing
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum InputMode {
-    /// Normal mode - regular keybindings work
     #[default]
     Normal,
-    /// Entering project path for new loop
     EnteringPath,
-    /// Entering prompt content for new loop
+    EnteringName,
     EnteringPrompt,
-    /// Entering instruction for selected loop
     EnteringInstruction,
 }
 
-/// Channel buffer size for subprocess output
 const OUTPUT_CHANNEL_SIZE: usize = 1000;
 
 /// Main application state
 pub struct App {
-    /// List of agents being monitored
     pub agents: Vec<Agent>,
-    /// Index of the currently selected agent
     pub selected_index: usize,
-    /// Scroll offset in the output pane
-    pub scroll_offset: usize,
-    /// Whether the output pane is focused (vs agent list)
     pub output_focused: bool,
-    /// Whether the application is still running
     pub running: bool,
-    /// Whether to auto-scroll to bottom when new output arrives
-    /// Set to false when user manually scrolls up, true when scrolling to bottom
-    pinned_to_bottom: bool,
-    /// Last time we updated agent outputs
     last_tick: Instant,
-    /// Frame counter for timing updates
     frame_count: u64,
-    /// Sender for subprocess output - clone this and pass to RalphLoop::start()
-    pub output_tx: mpsc::Sender<OutputLine>,
-    /// Receiver for subprocess output - drained in tick()
-    output_rx: mpsc::Receiver<OutputLine>,
-    /// Current input mode
+    /// Sender for terminal data - clone this and pass to RalphLoop::start()
+    pub terminal_tx: mpsc::Sender<TerminalData>,
+    /// Receiver for terminal data - drained in tick()
+    terminal_rx: mpsc::Receiver<TerminalData>,
     pub input_mode: InputMode,
-    /// Current input buffer for text entry
     pub input_buffer: String,
-    /// Pending project path (set during EnteringPath, used when moving to EnteringPrompt)
     pending_project_path: Option<PathBuf>,
-    /// Status message to display (cleared after showing)
+    pending_agent_name: Option<String>,
     pub status_message: Option<String>,
-    /// Detector for iteration boundaries in output
-    iteration_detector: IterationDetector,
-    /// Whether the help screen is being shown
     pub show_help: bool,
 }
 
 impl App {
-    /// Creates a new App, loading persisted state if available
-    ///
-    /// Loads agents from ~/.cockpit/state.json if the file exists.
-    /// All loaded agents start in Stopped status (user must restart manually).
-    /// Falls back to an empty agent list if no state file exists.
     pub fn new() -> Self {
         let agents = load_agents_from_state();
-        let (output_tx, output_rx) = mpsc::channel(OUTPUT_CHANNEL_SIZE);
+        let (terminal_tx, terminal_rx) = mpsc::channel(OUTPUT_CHANNEL_SIZE);
         Self {
             agents,
             selected_index: 0,
-            scroll_offset: 0,
             output_focused: false,
             running: true,
-            pinned_to_bottom: true,
             last_tick: Instant::now(),
             frame_count: 0,
-            output_tx,
-            output_rx,
+            terminal_tx,
+            terminal_rx,
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
             pending_project_path: None,
+            pending_agent_name: None,
             status_message: None,
-            iteration_detector: IterationDetector::new(),
             show_help: false,
         }
     }
 
-    /// Selects the next agent in the list
-    ///
-    /// Wraps around to the first agent if at the end.
     pub fn select_next(&mut self) {
         if self.agents.is_empty() {
             return;
         }
         self.selected_index = (self.selected_index + 1) % self.agents.len();
-        // Reset scroll and enable auto-scroll when changing selection
-        self.scroll_offset = 0;
-        self.pinned_to_bottom = true;
     }
 
-    /// Selects the previous agent in the list
-    ///
-    /// Wraps around to the last agent if at the beginning.
     pub fn select_prev(&mut self) {
         if self.agents.is_empty() {
             return;
@@ -122,83 +81,58 @@ impl App {
         } else {
             self.selected_index -= 1;
         }
-        // Reset scroll and enable auto-scroll when changing selection
-        self.scroll_offset = 0;
-        self.pinned_to_bottom = true;
     }
 
-    /// Returns a reference to the currently selected agent
-    ///
-    /// Returns None if there are no agents.
     pub fn selected_agent(&self) -> Option<&Agent> {
         self.agents.get(self.selected_index)
     }
 
-    /// Returns a mutable reference to the currently selected agent
-    ///
-    /// Returns None if there are no agents.
     pub fn selected_agent_mut(&mut self) -> Option<&mut Agent> {
         self.agents.get_mut(self.selected_index)
     }
 
-    /// Selects the first agent in the list
     pub fn select_first(&mut self) {
-        if self.agents.is_empty() {
-            return;
+        if !self.agents.is_empty() {
+            self.selected_index = 0;
         }
-        self.selected_index = 0;
-        // Reset scroll and enable auto-scroll when changing selection
-        self.scroll_offset = 0;
-        self.pinned_to_bottom = true;
     }
 
-    /// Selects the last agent in the list
     pub fn select_last(&mut self) {
-        if self.agents.is_empty() {
-            return;
+        if !self.agents.is_empty() {
+            self.selected_index = self.agents.len() - 1;
         }
-        self.selected_index = self.agents.len() - 1;
-        // Reset scroll and enable auto-scroll when changing selection
-        self.scroll_offset = 0;
-        self.pinned_to_bottom = true;
     }
 
-    /// Pauses the currently selected agent (if running)
     pub fn pause_selected(&mut self) {
         if let Some(agent) = self.selected_agent_mut() {
             if agent.status == AgentStatus::Running {
                 if let Err(e) = agent.pause() {
                     self.status_message = Some(format!("Failed to pause: {}", e));
                 } else {
-                    // Save state after status change
                     self.save_state();
                 }
             }
         }
     }
 
-    /// Resumes the currently selected agent (if paused)
     pub fn resume_selected(&mut self) {
         if let Some(agent) = self.selected_agent_mut() {
             if agent.status == AgentStatus::Paused {
                 if let Err(e) = agent.resume() {
                     self.status_message = Some(format!("Failed to resume: {}", e));
                 } else {
-                    // Save state after status change
                     self.save_state();
                 }
             }
         }
     }
 
-    /// Starts the currently selected agent (if stopped)
     pub fn start_selected(&mut self) {
-        let tx = self.output_tx.clone();
+        let tx = self.terminal_tx.clone();
         if let Some(agent) = self.selected_agent_mut() {
             if agent.status == AgentStatus::Stopped {
                 match agent.start(tx) {
                     Ok(()) => {
-                        // Save state after status change
                         self.save_state();
                     }
                     Err(e) => {
@@ -209,187 +143,95 @@ impl App {
         }
     }
 
-    /// Stops the currently selected agent
-    ///
-    /// Uses block_in_place to run the async stop operation from synchronous context.
     pub fn stop_selected(&mut self) {
         if let Some(agent) = self.selected_agent_mut() {
             if agent.status != AgentStatus::Stopped {
-                // Run the async stop in a blocking context
-                // This is safe because we're in a tokio runtime
                 tokio::task::block_in_place(|| {
                     let rt = tokio::runtime::Handle::current();
                     let _ = rt.block_on(agent.stop());
                 });
             }
         }
-        // Save state after stopping (outside the borrow)
         self.save_state();
     }
 
-    /// Toggles focus between agent list and output pane
-    pub fn toggle_focus(&mut self) {
-        self.output_focused = !self.output_focused;
-        // Reset scroll and enable auto-scroll when focusing output pane
-        if self.output_focused {
-            // Scroll to bottom and enable auto-scroll when entering focus
-            self.pinned_to_bottom = true;
-            self.scroll_to_bottom();
+    pub fn delete_selected(&mut self) {
+        if self.agents.is_empty() {
+            return;
         }
+
+        if let Some(agent) = self.selected_agent_mut() {
+            if agent.status != AgentStatus::Stopped {
+                tokio::task::block_in_place(|| {
+                    let rt = tokio::runtime::Handle::current();
+                    let _ = rt.block_on(agent.stop());
+                });
+            }
+        }
+
+        let name = self
+            .agents
+            .get(self.selected_index)
+            .map(|a| a.name.clone())
+            .unwrap_or_default();
+
+        self.agents.remove(self.selected_index);
+
+        if !self.agents.is_empty() && self.selected_index >= self.agents.len() {
+            self.selected_index = self.agents.len() - 1;
+        }
+
+        self.status_message = Some(format!("Removed: {}", name));
+        self.save_state();
     }
 
-    /// Unfocuses the output pane, returning to agent list
+    pub fn toggle_focus(&mut self) {
+        self.output_focused = !self.output_focused;
+    }
+
     pub fn unfocus_output(&mut self) {
         self.output_focused = false;
     }
 
-    /// Scrolls the output pane up by one line
-    pub fn scroll_up(&mut self) {
-        if self.scroll_offset > 0 {
-            self.scroll_offset -= 1;
-            // User is manually scrolling up, disable auto-scroll
-            self.pinned_to_bottom = false;
-        }
-    }
-
-    /// Scrolls the output pane down by one line
-    pub fn scroll_down(&mut self) {
-        // Get max scroll based on selected agent's output length
-        if let Some(agent) = self.selected_agent() {
-            let output_len = agent.output.len();
-            // Allow scrolling down but will be clamped in UI
-            if self.scroll_offset < output_len {
-                self.scroll_offset += 1;
-            }
-            // If we've scrolled to the bottom (or beyond), re-enable auto-scroll
-            if self.scroll_offset >= output_len {
-                self.pinned_to_bottom = true;
-            }
-        }
-    }
-
-    /// Scrolls the output pane up by half a page (approximately)
-    pub fn page_up(&mut self) {
-        // Scroll up by 10 lines (approximate half page)
-        let old_offset = self.scroll_offset;
-        self.scroll_offset = self.scroll_offset.saturating_sub(10);
-        // If we actually scrolled up, disable auto-scroll
-        if self.scroll_offset < old_offset {
-            self.pinned_to_bottom = false;
-        }
-    }
-
-    /// Scrolls the output pane down by half a page (approximately)
-    pub fn page_down(&mut self) {
-        // Get max scroll based on selected agent's output length
-        if let Some(agent) = self.selected_agent() {
-            let output_len = agent.output.len();
-            self.scroll_offset = (self.scroll_offset + 10).min(output_len);
-            // If we've scrolled to the bottom (or beyond), re-enable auto-scroll
-            if self.scroll_offset >= output_len {
-                self.pinned_to_bottom = true;
-            }
-        }
-    }
-
-    /// Scrolls to the bottom of the output
-    fn scroll_to_bottom(&mut self) {
-        if let Some(agent) = self.selected_agent() {
-            // Set scroll offset to show last lines
-            // The actual clamping happens in the UI based on visible height
-            self.scroll_offset = agent.output.len();
-        }
-    }
-
-    /// Called each frame to update application state
-    ///
-    /// Drains the output channel and routes lines to the appropriate agents.
-    /// Also writes output to log files for persistence.
-    /// Checks for iteration boundaries and increments iteration counters.
-    /// Auto-scrolls to bottom when new output is added if pinned_to_bottom is true.
+    /// Called each frame to update application state.
+    /// Drains terminal data and routes to appropriate agents.
     pub fn tick(&mut self) {
         self.frame_count += 1;
         self.last_tick = Instant::now();
 
-        // Track if the selected agent's output length changes
-        let selected_output_len_before = self
-            .agents
-            .get(self.selected_index)
-            .map(|a| a.output.len())
-            .unwrap_or(0);
-
-        // Track if any agent's iteration count changed (for state saving)
-        let mut iteration_changed = false;
-
-        // Drain the output channel and route to appropriate agents
-        while let Ok(output_line) = self.output_rx.try_recv() {
-            // Write to log file (ignore errors - logging is best-effort)
-            let _ = append_to_log(&output_line.agent_name, &output_line.line);
-
-            // Check for iteration boundaries
-            let boundary = self.iteration_detector.check_line(&output_line.line);
-
-            // Find the agent with matching name and add the output
+        // Drain the terminal data channel and route to appropriate agents
+        while let Ok(term_data) = self.terminal_rx.try_recv() {
             if let Some(agent) = self
                 .agents
                 .iter_mut()
-                .find(|a| a.name == output_line.agent_name)
+                .find(|a| a.name == term_data.agent_name)
             {
-                agent.add_output(&output_line.line);
-
-                // Increment iteration counter on boundary detection and add visual separator
-                match boundary {
-                    IterationBoundary::Completed | IterationBoundary::Done => {
-                        agent.iteration += 1;
-                        iteration_changed = true;
-
-                        // Add visual separator after the iteration boundary
-                        let separator = format!(
-                            "───────────────────── iteration {} ─────────────────────",
-                            agent.iteration
-                        );
-                        agent.add_output(&separator);
-                    }
-                    IterationBoundary::None => {}
-                }
+                agent.process_terminal_data(&term_data.data);
             }
-        }
-
-        // Save state if iteration count changed
-        if iteration_changed {
-            self.save_state();
-        }
-
-        // Check if selected agent got new output
-        let selected_output_len_after = self
-            .agents
-            .get(self.selected_index)
-            .map(|a| a.output.len())
-            .unwrap_or(0);
-
-        // Auto-scroll to bottom if pinned and new output was added to selected agent
-        if self.pinned_to_bottom && selected_output_len_after > selected_output_len_before {
-            self.scroll_to_bottom();
         }
     }
 
-    /// Starts the "new loop" flow by entering path input mode
+    /// Send keyboard input to the focused agent's PTY
+    pub fn send_input_to_agent(&mut self, data: &[u8]) {
+        if let Some(agent) = self.selected_agent() {
+            let _ = agent.send_input(data);
+        }
+    }
+
     pub fn start_new_loop(&mut self) {
         self.input_mode = InputMode::EnteringPath;
         self.input_buffer.clear();
         self.pending_project_path = None;
     }
 
-    /// Cancels input mode and returns to normal
     pub fn cancel_input(&mut self) {
         self.input_mode = InputMode::Normal;
         self.input_buffer.clear();
         self.pending_project_path = None;
+        self.pending_agent_name = None;
     }
 
-    /// Starts the "instruct" flow by entering instruction input mode
     pub fn start_instruction(&mut self) {
-        // Only allow instruction if selected agent has a project path
         if let Some(agent) = self.selected_agent() {
             if agent.project_path.is_none() {
                 self.status_message = Some("No project path for this agent".to_string());
@@ -404,12 +246,10 @@ impl App {
         self.input_buffer.clear();
     }
 
-    /// Submits the current input based on input mode
     fn submit_input(&mut self) {
         match self.input_mode {
             InputMode::Normal => {}
             InputMode::EnteringPath => {
-                // Validate and store the path, move to prompt entry
                 let path = PathBuf::from(self.input_buffer.trim());
                 if path.as_os_str().is_empty() {
                     self.status_message = Some("Path cannot be empty".to_string());
@@ -417,56 +257,63 @@ impl App {
                 }
                 self.pending_project_path = Some(path);
                 self.input_buffer.clear();
+                self.input_mode = InputMode::EnteringName;
+            }
+            InputMode::EnteringName => {
+                let name = self.input_buffer.trim().to_string();
+                if name.is_empty() {
+                    if let Some(ref path) = self.pending_project_path {
+                        let derived_name = path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("unnamed")
+                            .to_string();
+                        self.pending_agent_name = Some(derived_name);
+                    } else {
+                        self.pending_agent_name = Some("unnamed".to_string());
+                    }
+                } else {
+                    self.pending_agent_name = Some(name);
+                }
+                self.input_buffer.clear();
                 self.input_mode = InputMode::EnteringPrompt;
             }
             InputMode::EnteringPrompt => {
-                // Create the project and add agent
                 self.create_loop_from_input();
             }
             InputMode::EnteringInstruction => {
-                // Send instruction to selected agent's project
                 self.submit_instruction();
             }
         }
     }
 
-    /// Creates a new loop project and adds it as an agent
     fn create_loop_from_input(&mut self) {
-        let Some(project_path) = self.pending_project_path.take() else {
+        let Some(base_path) = self.pending_project_path.take() else {
             self.status_message = Some("No project path set".to_string());
             self.cancel_input();
             return;
         };
 
-        // Use default prompt if empty
+        let Some(agent_name) = self.pending_agent_name.take() else {
+            self.status_message = Some("No agent name set".to_string());
+            self.cancel_input();
+            return;
+        };
+
         let prompt_content = if self.input_buffer.trim().is_empty() {
             default_prompt_content()
         } else {
             self.input_buffer.clone()
         };
 
-        // Create the project
+        let project_path = base_path.join(".agents").join(&agent_name);
+
         match RalphProject::create(project_path.clone(), &prompt_content) {
             Ok(_project) => {
-                // Derive agent name from directory name
-                let name = project_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("unnamed")
-                    .to_string();
-
-                // Create agent with project path
-                let agent = Agent::with_project(&name, project_path);
+                let agent = Agent::with_project(&agent_name, project_path);
                 self.agents.push(agent);
-
-                // Select the new agent
                 self.selected_index = self.agents.len() - 1;
-                self.scroll_offset = 0;
-                self.pinned_to_bottom = true;
-
-                self.status_message = Some(format!("Created loop: {}", name));
-
-                // Save state after creating a new loop
+                self.status_message = Some(format!("Created loop: {}", agent_name));
                 self.save_state();
             }
             Err(e) => {
@@ -474,16 +321,13 @@ impl App {
             }
         }
 
-        // Return to normal mode
         self.input_buffer.clear();
         self.input_mode = InputMode::Normal;
     }
 
-    /// Submits the instruction to the selected agent's project
     fn submit_instruction(&mut self) {
         let instruction_text = self.input_buffer.trim().to_string();
 
-        // Don't allow empty instructions
         if instruction_text.is_empty() {
             self.status_message = Some("Instruction cannot be empty".to_string());
             self.input_buffer.clear();
@@ -491,59 +335,53 @@ impl App {
             return;
         }
 
-        // Get the project path from the selected agent
-        let project_path = match self.selected_agent() {
-            Some(agent) => match &agent.project_path {
-                Some(path) => path.clone(),
-                None => {
-                    self.status_message = Some("No project path for this agent".to_string());
-                    self.input_buffer.clear();
-                    self.input_mode = InputMode::Normal;
-                    return;
+        // Send directly to the agent's PTY if running
+        if let Some(agent) = self.selected_agent() {
+            if agent.status == AgentStatus::Running {
+                if let Err(e) = agent.send_input(instruction_text.as_bytes()) {
+                    self.status_message = Some(format!("Failed to send: {}", e));
+                } else {
+                    // Also send newline
+                    let _ = agent.send_input(b"\n");
+                    self.status_message = Some("Instruction sent to Claude".to_string());
                 }
-            },
-            None => {
-                self.status_message = Some("No agent selected".to_string());
-                self.input_buffer.clear();
-                self.input_mode = InputMode::Normal;
-                return;
-            }
-        };
-
-        // Load the project and append the instruction
-        match RalphProject::from_path(project_path) {
-            Ok(project) => match project.append_instruction(&instruction_text) {
-                Ok(()) => {
-                    self.status_message = Some("Instruction sent".to_string());
+            } else {
+                // Fall back to writing to file if not running
+                if let Some(ref path) = agent.project_path {
+                    match RalphProject::from_path(path.clone()) {
+                        Ok(project) => match project.append_instruction(&instruction_text) {
+                            Ok(()) => {
+                                self.status_message = Some("Instruction saved to file".to_string());
+                            }
+                            Err(e) => {
+                                self.status_message =
+                                    Some(format!("Failed to write instruction: {}", e));
+                            }
+                        },
+                        Err(e) => {
+                            self.status_message = Some(format!("Failed to load project: {}", e));
+                        }
+                    }
                 }
-                Err(e) => {
-                    self.status_message = Some(format!("Failed to write instruction: {}", e));
-                }
-            },
-            Err(e) => {
-                self.status_message = Some(format!("Failed to load project: {}", e));
             }
         }
 
-        // Return to normal mode
         self.input_buffer.clear();
         self.input_mode = InputMode::Normal;
     }
 
-    /// Returns the prompt text to show for the current input mode
     pub fn input_prompt(&self) -> &str {
         match self.input_mode {
             InputMode::Normal => "",
-            InputMode::EnteringPath => "Project path: ",
+            InputMode::EnteringPath => "Target repo path: ",
+            InputMode::EnteringName => "Agent name: ",
             InputMode::EnteringPrompt => "Prompt (Enter for default): ",
-            InputMode::EnteringInstruction => "Instruction: ",
+            InputMode::EnteringInstruction => "Message to Claude: ",
         }
     }
 
-    /// Handles a key press event
-    ///
-    /// Dispatches to the appropriate handler based on key code and input mode.
-    /// Returns true if the key was handled.
+    /// Handles a key press event.
+    /// When output is focused and agent is running, forwards input to PTY.
     pub fn handle_key(
         &mut self,
         code: crossterm::event::KeyCode,
@@ -551,7 +389,6 @@ impl App {
     ) -> bool {
         use crossterm::event::{KeyCode, KeyModifiers};
 
-        // Clear status message on any key press
         self.status_message = None;
 
         // Handle input modes first
@@ -565,9 +402,9 @@ impl App {
             return true;
         }
 
-        // Global keybindings (work regardless of focus state)
+        // Global quit keybindings
         match code {
-            KeyCode::Char('q') => {
+            KeyCode::Char('q') if !self.output_focused => {
                 self.running = false;
                 return true;
             }
@@ -575,46 +412,47 @@ impl App {
                 self.running = false;
                 return true;
             }
-            KeyCode::Char('?') => {
-                self.show_help = true;
-                return true;
-            }
-            KeyCode::Enter => {
-                self.toggle_focus();
-                return true;
-            }
             _ => {}
         }
 
-        // Focus-dependent keybindings
+        // When output is focused and agent is running or paused, forward most keys to PTY
         if self.output_focused {
-            // Output pane is focused: j/k scroll, Esc unfocuses, Ctrl+d/u page scroll
+            if let Some(agent) = self.selected_agent() {
+                if agent.status == AgentStatus::Running || agent.status == AgentStatus::Paused {
+                    // Escape unfocuses
+                    if code == KeyCode::Esc {
+                        self.unfocus_output();
+                        return true;
+                    }
+
+                    // Forward key to PTY
+                    let bytes = key_to_bytes(code, modifiers);
+                    if !bytes.is_empty() {
+                        self.send_input_to_agent(&bytes);
+                        return true;
+                    }
+                }
+            }
+
+            // If not running or unhandled, use scroll keybindings
             match code {
-                KeyCode::Char('j') | KeyCode::Down => {
-                    self.scroll_down();
-                    true
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    self.scroll_up();
-                    true
-                }
                 KeyCode::Esc => {
                     self.unfocus_output();
-                    true
-                }
-                KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.page_down();
-                    true
-                }
-                KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.page_up();
                     true
                 }
                 _ => false,
             }
         } else {
-            // Agent list is focused: navigation and control keybindings
+            // Agent list focused
             match code {
+                KeyCode::Char('?') => {
+                    self.show_help = true;
+                    true
+                }
+                KeyCode::Enter => {
+                    self.toggle_focus();
+                    true
+                }
                 KeyCode::Char('j') | KeyCode::Down => {
                     self.select_next();
                     true
@@ -631,7 +469,6 @@ impl App {
                     self.select_last();
                     true
                 }
-                // Agent control keybindings
                 KeyCode::Char('S') => {
                     self.start_selected();
                     true
@@ -648,14 +485,16 @@ impl App {
                     self.stop_selected();
                     true
                 }
-                // New loop creation
                 KeyCode::Char('n') => {
                     self.start_new_loop();
                     true
                 }
-                // Instruction input
                 KeyCode::Char('i') => {
                     self.start_instruction();
+                    true
+                }
+                KeyCode::Char('d') => {
+                    self.delete_selected();
                     true
                 }
                 _ => false,
@@ -663,7 +502,6 @@ impl App {
         }
     }
 
-    /// Handles key presses during input mode (text entry)
     fn handle_input_key(
         &mut self,
         code: crossterm::event::KeyCode,
@@ -691,47 +529,65 @@ impl App {
             _ => false,
         }
     }
+
+    pub fn save_state(&self) {
+        let mut state = PersistedState::new();
+
+        for agent in &self.agents {
+            if let Some(ref project_path) = agent.project_path {
+                state.upsert_loop(LoopState {
+                    name: agent.name.clone(),
+                    project_path: project_path.clone(),
+                    last_iteration: agent.iteration,
+                });
+            }
+        }
+
+        if let Err(e) = save_state(&state) {
+            eprintln!("Failed to save state: {}", e);
+        }
+    }
+
+    pub fn shutdown(&mut self) {
+        self.save_state();
+
+        tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                for agent in &mut self.agents {
+                    if agent.status != AgentStatus::Stopped {
+                        let _ = agent.stop().await;
+                    }
+                }
+            });
+        });
+    }
 }
 
-/// Maximum number of log lines to load on startup
-const MAX_LOG_HISTORY_LINES: usize = 1000;
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-/// Loads agents from persisted state file
-///
-/// Returns agents recreated from ~/.cockpit/state.json.
-/// All agents start in Stopped status - user must manually restart them.
-/// Also loads recent output history from log files.
-/// Returns an empty vector if no state file exists or loading fails.
 fn load_agents_from_state() -> Vec<Agent> {
     match load_state() {
-        Ok(state) => {
-            state
-                .loops
-                .into_iter()
-                .map(|loop_state| {
-                    // Create agent with the persisted project path
-                    // Agent starts Stopped - user must restart manually
-                    let mut agent = Agent::with_project(&loop_state.name, loop_state.project_path);
-                    agent.iteration = loop_state.last_iteration;
-
-                    // Load recent output history from log file
-                    if let Ok(history) = load_recent_log(&loop_state.name, MAX_LOG_HISTORY_LINES) {
-                        agent.output = history;
-                    }
-
-                    agent
-                })
-                .collect()
-        }
+        Ok(state) => state
+            .loops
+            .into_iter()
+            .map(|loop_state| {
+                let mut agent = Agent::with_project(&loop_state.name, loop_state.project_path);
+                agent.iteration = loop_state.last_iteration;
+                agent
+            })
+            .collect(),
         Err(e) => {
-            // Log error but don't crash - just start with empty list
             eprintln!("Failed to load state: {}", e);
             Vec::new()
         }
     }
 }
 
-/// Returns the default prompt content for new projects
 fn default_prompt_content() -> String {
     r#"# Ralph Loop Prompt
 
@@ -752,60 +608,58 @@ You are an autonomous agent running in a loop. Each iteration:
     .to_string()
 }
 
-impl App {
-    /// Saves the current state to disk
-    ///
-    /// Collects state from all agents with project paths and persists it.
-    /// Logs errors but does not propagate them (save failures are not fatal).
-    pub fn save_state(&self) {
-        let mut state = PersistedState::new();
+/// Convert a key event to bytes to send to the PTY
+fn key_to_bytes(
+    code: crossterm::event::KeyCode,
+    modifiers: crossterm::event::KeyModifiers,
+) -> Vec<u8> {
+    use crossterm::event::{KeyCode, KeyModifiers};
 
-        for agent in &self.agents {
-            // Only persist agents that have a project path
-            if let Some(ref project_path) = agent.project_path {
-                state.upsert_loop(LoopState {
-                    name: agent.name.clone(),
-                    project_path: project_path.clone(),
-                    last_iteration: agent.iteration,
-                });
+    match code {
+        KeyCode::Char(c) => {
+            if modifiers.contains(KeyModifiers::CONTROL) {
+                // Ctrl+A = 0x01, Ctrl+B = 0x02, etc.
+                let ctrl_char = (c as u8).wrapping_sub(b'a' - 1);
+                if ctrl_char <= 26 {
+                    return vec![ctrl_char];
+                }
+            }
+            let mut buf = [0u8; 4];
+            let s = c.encode_utf8(&mut buf);
+            s.as_bytes().to_vec()
+        }
+        KeyCode::Enter => vec![b'\r'],
+        KeyCode::Backspace => vec![127],
+        KeyCode::Tab => vec![b'\t'],
+        KeyCode::Esc => vec![27],
+        KeyCode::Up => vec![27, b'[', b'A'],
+        KeyCode::Down => vec![27, b'[', b'B'],
+        KeyCode::Right => vec![27, b'[', b'C'],
+        KeyCode::Left => vec![27, b'[', b'D'],
+        KeyCode::Home => vec![27, b'[', b'H'],
+        KeyCode::End => vec![27, b'[', b'F'],
+        KeyCode::PageUp => vec![27, b'[', b'5', b'~'],
+        KeyCode::PageDown => vec![27, b'[', b'6', b'~'],
+        KeyCode::Delete => vec![27, b'[', b'3', b'~'],
+        KeyCode::Insert => vec![27, b'[', b'2', b'~'],
+        KeyCode::F(n) => {
+            // F1-F4 use different sequences
+            match n {
+                1 => vec![27, b'O', b'P'],
+                2 => vec![27, b'O', b'Q'],
+                3 => vec![27, b'O', b'R'],
+                4 => vec![27, b'O', b'S'],
+                5 => vec![27, b'[', b'1', b'5', b'~'],
+                6 => vec![27, b'[', b'1', b'7', b'~'],
+                7 => vec![27, b'[', b'1', b'8', b'~'],
+                8 => vec![27, b'[', b'1', b'9', b'~'],
+                9 => vec![27, b'[', b'2', b'0', b'~'],
+                10 => vec![27, b'[', b'2', b'1', b'~'],
+                11 => vec![27, b'[', b'2', b'3', b'~'],
+                12 => vec![27, b'[', b'2', b'4', b'~'],
+                _ => vec![],
             }
         }
-
-        if let Err(e) = save_state(&state) {
-            // Log the error but don't crash - persistence is best-effort
-            eprintln!("Failed to save state: {}", e);
-        }
-    }
-}
-
-impl Default for App {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl App {
-    /// Performs graceful shutdown of all resources.
-    ///
-    /// This method should be called before the application exits.
-    /// It stops all running subprocesses and saves the current state.
-    ///
-    /// Uses block_in_place to run async stop operations from synchronous context.
-    pub fn shutdown(&mut self) {
-        // Save state first (before stopping agents, to preserve current iteration counts)
-        self.save_state();
-
-        // Stop all agents with running subprocesses
-        tokio::task::block_in_place(|| {
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(async {
-                for agent in &mut self.agents {
-                    if agent.status != AgentStatus::Stopped {
-                        // Stop the subprocess (this handles SIGTERM -> wait -> SIGKILL if needed)
-                        let _ = agent.stop().await;
-                    }
-                }
-            });
-        });
+        _ => vec![],
     }
 }
