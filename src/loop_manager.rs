@@ -2,6 +2,7 @@ use nix::libc;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Instant;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
@@ -114,16 +115,40 @@ impl RalphLoop {
         // PGID equals PID when we create a new process group
         self.pgid = pid.map(|p| p as i32);
 
-        // Take stdout for the async reader (to be implemented in 2.3)
-        let _stdout = child.stdout.take();
+        // Take stdout for the async reader
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or("Failed to capture stdout from subprocess")?;
 
         // Store the child handle
         self.child = Some(child);
 
-        // Note: The async output reader task will be spawned in task 2.3
-        // For now, we just drop the stdout (and tx is unused)
-        let _ = tx;
-        let _ = agent_name;
+        // Spawn async task to read stdout lines and send to channel
+        tokio::spawn(async move {
+            let reader = BufReader::new(stdout);
+            let mut lines = reader.lines();
+
+            loop {
+                match lines.next_line().await {
+                    Ok(Some(line)) => {
+                        let output_line = OutputLine::new(agent_name.clone(), line);
+                        // If the receiver is dropped, stop reading
+                        if tx.send(output_line).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(None) => {
+                        // EOF - process has closed stdout
+                        break;
+                    }
+                    Err(_) => {
+                        // Read error - stop reading
+                        break;
+                    }
+                }
+            }
+        });
 
         Ok(())
     }

@@ -42,7 +42,7 @@
   - Configure stdout pipe for capture
   - Store Child handle and PID
 
-- [ ] **2.3 Implement async output reader**
+- [x] **2.3 Implement async output reader**
   - Spawn tokio task to read stdout lines
   - Send lines to mpsc channel with timestamp
   - Handle process exit gracefully
