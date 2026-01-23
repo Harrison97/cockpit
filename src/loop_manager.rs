@@ -478,15 +478,23 @@ impl RalphLoop {
 
         // Helper to wait for child process to be reaped (prevents zombies)
         fn wait_for_child_exit(child: &mut Box<dyn portable_pty::Child + Send + Sync>) {
-            // Wait up to 2 seconds for the child to exit
+            // Wait up to 2 seconds for the child to exit gracefully
+            // If still alive after 2s, send kill signal and wait up to 1 more second
             let wait_start = Instant::now();
+            let mut killed = false;
             loop {
                 match child.try_wait() {
                     Ok(Some(_)) => break, // Process reaped
                     Ok(None) => {
-                        if wait_start.elapsed() > Duration::from_secs(2) {
+                        let elapsed = wait_start.elapsed();
+                        if !killed && elapsed > Duration::from_secs(2) {
                             // Timeout - force kill
                             let _ = child.kill();
+                            killed = true;
+                        } else if killed && elapsed > Duration::from_secs(3) {
+                            // Give up after 3s total (2s grace + 1s after kill)
+                            // Process will become zombie but we won't hang
+                            break;
                         }
                         std::thread::sleep(Duration::from_millis(10));
                     }
