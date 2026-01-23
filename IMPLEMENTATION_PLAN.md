@@ -272,7 +272,7 @@
   - Set to `Ready` when first output received (or short delay)
   - Set to `Stopping` during stop/restart transitions
 
-- [ ] **12.2 Buffer or block input during transitions**
+- [x] **12.2 Buffer or block input during transitions**
   - In `Agent::send_input()`, check `process_state`
   - If `Starting` or `Stopping`, drop input silently (or buffer)
   - Only forward input when `Ready`

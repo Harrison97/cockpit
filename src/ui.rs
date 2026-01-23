@@ -12,7 +12,7 @@ use ratatui::{
 };
 use tui_term::widget::PseudoTerminal;
 
-use crate::agent::{Agent, AgentStatus, AgentType};
+use crate::agent::{Agent, AgentStatus, AgentType, ProcessState};
 use crate::app::{App, InputMode, SearchMode, LINES_PER_AGENT};
 
 /// Search state passed to terminal rendering
@@ -351,6 +351,14 @@ fn render_terminal_pane(
                     max
                 })
                 .unwrap_or(0);
+
+            // Check if input is blocked during process transitions
+            let process_state_hint = match a.process_state {
+                ProcessState::Starting => " [Starting...]",
+                ProcessState::Stopping => " [Stopping...]",
+                _ => "",
+            };
+
             let focus_hint = if is_searching {
                 if !search.matches.is_empty() {
                     format!(
@@ -380,7 +388,10 @@ fn render_terminal_pane(
             } else {
                 " [Space to focus]".to_string()
             };
-            (format!("{}{}", a.name, focus_hint), a.scroll_offset)
+            (
+                format!("{}{}{}", a.name, process_state_hint, focus_hint),
+                a.scroll_offset,
+            )
         }
         None => ("Terminal (none)".to_string(), 0),
     };

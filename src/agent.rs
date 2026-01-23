@@ -350,8 +350,15 @@ impl Agent {
         self.scroll_offset = 0;
     }
 
-    /// Send keyboard input to the agent's PTY
+    /// Send keyboard input to the agent's PTY.
+    /// Input is silently dropped if process is not Ready (e.g., during Starting or Stopping).
     pub fn send_input(&self, data: &[u8]) -> Result<(), AgentError> {
+        // Only forward input when process is Ready
+        if self.process_state != ProcessState::Ready {
+            // Silently drop input during transitions
+            return Ok(());
+        }
+
         if let Some(ref ralph_loop) = self.ralph_loop {
             ralph_loop.send_input(data)?;
         }
