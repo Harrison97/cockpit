@@ -509,20 +509,36 @@ impl App {
             }
             InputMode::EnteringName => {
                 let name = self.input_buffer.trim().to_string();
-                if name.is_empty() {
+                let final_name = if name.is_empty() {
                     if let Some(ref path) = self.pending_project_path {
-                        let derived_name = path
-                            .file_name()
+                        path.file_name()
                             .and_then(|n| n.to_str())
                             .unwrap_or("unnamed")
-                            .to_string();
-                        self.pending_agent_name = Some(derived_name);
+                            .to_string()
                     } else {
-                        self.pending_agent_name = Some("unnamed".to_string());
+                        "unnamed".to_string()
                     }
                 } else {
-                    self.pending_agent_name = Some(name);
+                    name
+                };
+
+                // Validate agent name to prevent path traversal attacks
+                // Reject names containing path separators or starting with dots
+                if final_name.contains('/') || final_name.contains('\\') {
+                    self.status_message =
+                        Some("Agent name cannot contain path separators (/ or \\)".to_string());
+                    return;
                 }
+                if final_name.starts_with('.') {
+                    self.status_message = Some("Agent name cannot start with a dot".to_string());
+                    return;
+                }
+                if final_name == "." || final_name == ".." {
+                    self.status_message = Some("Invalid agent name".to_string());
+                    return;
+                }
+
+                self.pending_agent_name = Some(final_name);
                 self.input_buffer.clear();
                 self.paste_info = None;
                 self.input_mode = InputMode::EnteringPrompt;
@@ -558,7 +574,33 @@ impl App {
             AgentType::RalphLoop
         };
 
-        let project_path = base_path.join(".agents").join(&agent_name);
+        let agents_dir = base_path.join(".agents");
+        let project_path = agents_dir.join(&agent_name);
+
+        // Defense-in-depth: verify the resolved path stays within .agents directory
+        // This catches any path traversal that might have slipped through name validation
+        let resolved_project = project_path.canonicalize().unwrap_or_else(|_| {
+            // If path doesn't exist yet, check parent exists and construct expected path
+            if let Some(parent) = project_path.parent() {
+                if let Ok(resolved_parent) = parent.canonicalize() {
+                    if let Some(name) = project_path.file_name() {
+                        return resolved_parent.join(name);
+                    }
+                }
+            }
+            // Fallback: use the raw path if we can't resolve
+            project_path.clone()
+        });
+        if let Ok(resolved_agents) = agents_dir.canonicalize() {
+            if !resolved_project.starts_with(&resolved_agents) {
+                self.status_message =
+                    Some("Invalid project path: would escape agents directory".to_string());
+                self.input_buffer.clear();
+                self.input_mode = InputMode::Normal;
+                return;
+            }
+        }
+
         let working_dir = base_path.clone();
 
         match RalphProject::create(project_path.clone(), &prompt_content) {

@@ -37,7 +37,7 @@ Last verified: 2026-01-23
 - [x] State file atomic writes - verified 2026-01-23 (write to temp, rename in persistence.rs:95-97)
 - [x] History file opened in append mode - verified 2026-01-23 (OpenOptions::append in agent.rs:266)
 - [x] No sensitive data in state file - verified 2026-01-23 (only paths, names, iteration count)
-- [ ] Paths validated before file operations - needs review (some path validation exists)
+- [x] Paths validated before file operations - verified 2026-01-23 (agent name sanitized + canonicalize check in app.rs)
 
 ## Performance
 

@@ -1,5 +1,18 @@
 # Audit Findings
 
+## 2026-01-23 - Hardening Loop Iteration 3
+
+### MUST FIX (Completed this iteration)
+
+- [x] **Path traversal vulnerability in agent name validation**
+  - Location: `src/app.rs:510-525` (InputMode::EnteringName handling)
+  - Risk: User-supplied agent name was used directly in path construction without validation.
+    A malicious name like `../../../tmp/evil` would escape the `.agents` directory.
+  - Fix: Added validation to reject names containing `/`, `\`, or starting with `.`
+  - Defense-in-depth: Added canonicalize check to verify final path stays within `.agents` directory
+
+---
+
 ## 2026-01-23 - Hardening Loop Iteration 2
 
 ### SHOULD FIX (Completed this iteration)
@@ -38,6 +51,20 @@
   - Fix: Replace all `.unwrap()` on mutex locks with proper poisoned mutex handling using `into_inner()` to recover the guard
 
 ## Verification Evidence
+
+### Path traversal fix - 2026-01-23
+
+**Command**: `cargo fmt --check`
+**Result**: PASS
+
+**Command**: `cargo clippy -- -D warnings`
+**Result**: PASS
+
+**Command**: `cargo build`
+**Result**: PASS
+
+**Command**: `cargo test`
+**Result**: PASS (4 tests passed)
 
 ### Search matches limit fix - 2026-01-23
 
