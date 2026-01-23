@@ -1,6 +1,7 @@
 mod agent;
 mod app;
 mod loop_manager;
+mod persistence;
 mod project;
 mod ui;
 

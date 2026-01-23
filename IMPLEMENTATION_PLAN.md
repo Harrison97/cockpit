@@ -126,7 +126,7 @@
 
 ## Phase 6: Persistence
 
-- [ ] **6.1 Create persistence module**
+- [x] **6.1 Create persistence module**
   - Create `src/persistence.rs`
   - Define state file path: `~/.cockpit/state.json`
   - Define log directory: `~/.cockpit/logs/`
