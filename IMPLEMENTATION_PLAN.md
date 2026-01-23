@@ -71,7 +71,7 @@
   - Implement new() initializing with mock agents
   - Implement select_next(), select_prev(), selected_agent()
 
-- [ ] **4.2 Implement main event loop**
+- [x] **4.2 Implement main event loop**
   - Poll for events with 16ms timeout (60 FPS)
   - On tick: update mock agent output (if running)
   - On key event: dispatch to handlers

@@ -72,6 +72,8 @@ pub struct Agent {
     pub start_time: Option<Instant>,
     pub output: Vec<String>,
     pub iteration: u32,
+    /// Index tracking which mock output line to add next
+    pub mock_output_index: usize,
 }
 
 impl Agent {
@@ -85,6 +87,7 @@ impl Agent {
             start_time: None,
             output: Vec::new(),
             iteration: 0,
+            mock_output_index: 0,
         }
     }
 
@@ -124,6 +127,30 @@ impl Agent {
             self.status = AgentStatus::Running;
         }
     }
+
+    /// Returns the mock output lines for this agent based on its name
+    fn mock_outputs(&self) -> &'static [&'static str] {
+        match self.name.as_str() {
+            "alpha" => ALPHA_OUTPUTS,
+            "gamma" => GAMMA_OUTPUTS,
+            // Default to alpha outputs for unknown agents
+            _ => ALPHA_OUTPUTS,
+        }
+    }
+
+    /// Adds the next mock output line if available
+    ///
+    /// Returns true if a line was added, false if we've reached the end
+    pub fn add_next_mock_output(&mut self) -> bool {
+        let outputs = self.mock_outputs();
+        if self.mock_output_index < outputs.len() {
+            self.add_output(outputs[self.mock_output_index]);
+            self.mock_output_index += 1;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Creates mock agents for demonstration purposes
@@ -140,6 +167,7 @@ pub fn create_mock_agents() -> Vec<Agent> {
     for line in ALPHA_OUTPUTS.iter().take(4) {
         alpha.add_output(line);
     }
+    alpha.mock_output_index = 4; // Next line to add
 
     let beta = Agent::new("beta");
     // beta stays Stopped with no output
@@ -151,6 +179,7 @@ pub fn create_mock_agents() -> Vec<Agent> {
     for line in GAMMA_OUTPUTS.iter().take(3) {
         gamma.add_output(line);
     }
+    gamma.mock_output_index = 3; // Next line to add
 
     vec![alpha, beta, gamma]
 }

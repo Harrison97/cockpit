@@ -4,7 +4,8 @@
 
 #![allow(dead_code)] // Methods will be used as more features are implemented
 
-use crate::agent::{create_mock_agents, Agent};
+use crate::agent::{create_mock_agents, Agent, AgentStatus};
+use std::time::Instant;
 
 /// Main application state
 pub struct App {
@@ -18,6 +19,10 @@ pub struct App {
     pub output_focused: bool,
     /// Whether the application is still running
     pub running: bool,
+    /// Last time we updated agent outputs
+    last_tick: Instant,
+    /// Frame counter for timing updates
+    frame_count: u64,
 }
 
 impl App {
@@ -30,6 +35,8 @@ impl App {
             scroll_offset: 0,
             output_focused: false,
             running: true,
+            last_tick: Instant::now(),
+            frame_count: 0,
         }
     }
 
@@ -73,6 +80,51 @@ impl App {
     /// Returns None if there are no agents.
     pub fn selected_agent_mut(&mut self) -> Option<&mut Agent> {
         self.agents.get_mut(self.selected_index)
+    }
+
+    /// Called each frame to update application state
+    ///
+    /// Updates running agents' mock output periodically (every ~2 seconds)
+    pub fn tick(&mut self) {
+        self.frame_count += 1;
+
+        // Update mock output approximately every 2 seconds (120 frames at 60 FPS)
+        // Only check if enough time has passed since last tick
+        if self.last_tick.elapsed().as_millis() >= 2000 {
+            self.last_tick = Instant::now();
+
+            // Update all running agents
+            for agent in &mut self.agents {
+                if agent.status == AgentStatus::Running {
+                    agent.add_next_mock_output();
+                }
+            }
+        }
+    }
+
+    /// Handles a key press event
+    ///
+    /// Dispatches to the appropriate handler based on key code.
+    /// Returns true if the key was handled.
+    pub fn handle_key(
+        &mut self,
+        code: crossterm::event::KeyCode,
+        modifiers: crossterm::event::KeyModifiers,
+    ) -> bool {
+        use crossterm::event::KeyCode;
+
+        match code {
+            KeyCode::Char('q') => {
+                self.running = false;
+                true
+            }
+            KeyCode::Char('c') if modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                self.running = false;
+                true
+            }
+            // Navigation and other keybindings will be added in subsequent tasks
+            _ => false,
+        }
     }
 }
 

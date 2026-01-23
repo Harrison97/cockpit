@@ -6,7 +6,7 @@ use std::io;
 
 use app::App;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyEventKind},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
@@ -48,18 +48,13 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
             if let Event::Key(key) = event::read()? {
                 // Only handle key press events (not release)
                 if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') => app.running = false,
-                        KeyCode::Char('c')
-                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
-                        {
-                            app.running = false;
-                        }
-                        _ => {}
-                    }
+                    app.handle_key(key.code, key.modifiers);
                 }
             }
         }
+
+        // Update application state (mock agent output, etc.)
+        app.tick();
     }
 
     Ok(())
