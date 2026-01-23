@@ -4,6 +4,7 @@
 
 #![allow(dead_code)]
 
+use crate::agent::AgentType;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -41,6 +42,9 @@ pub struct LoopState {
     #[serde(default)]
     pub working_dir: Option<PathBuf>,
     pub last_iteration: u32,
+    /// Type of agent: RalphLoop or ClaudeInstance
+    #[serde(default)]
+    pub agent_type: AgentType,
 }
 
 /// Persisted application state

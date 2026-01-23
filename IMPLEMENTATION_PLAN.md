@@ -178,6 +178,83 @@
   - Add help screen with `?`
   - Show loop project path
 
+## Phase 9: Claude Instance Mode & UX Improvements
+
+- [x] **9.1 Add AgentType enum**
+  - Add `AgentType` enum: `RalphLoop` (has PROMPT.md) vs `ClaudeInstance` (no prompt)
+  - Add `agent_type` field to `Agent` struct
+  - Update `Agent::with_project()` to accept agent_type parameter
+  - Update persistence to save/load agent_type
+
+- [ ] **9.2 Support prompt-less agent creation**
+  - Modify `RalphProject::create()` to skip PROMPT.md when prompt is empty
+  - When prompt is empty, set agent_type to `ClaudeInstance`
+  - Update UI labels: show "Claude Instance" for prompt-less agents
+
+- [ ] **9.3 Modify RalphLoop for Claude instances**
+  - Add `is_ralph_loop: bool` field to `RalphLoop`
+  - For Claude instances: spawn `claude --dangerously-skip-permissions` directly (no cat pipe)
+  - For Claude instances: do NOT auto-restart on idle timeout
+  - When process exits naturally, set `running` to false
+
+- [ ] **9.4 Disable pause for Claude instances**
+  - `Agent::pause()` returns error for ClaudeInstance type
+  - Add `Agent::can_pause()` method
+  - Update UI to gray out or hide pause option for Claude instances
+
+- [ ] **9.5 Detect process exit and update status**
+  - When subprocess exits (not killed by user), detect in tick() or via channel
+  - Automatically set agent status to Stopped
+  - Show "[Exited]" message in terminal, no restart message
+
+- [ ] **9.6 Simplify keybindings**
+  - `s` = stop (unchanged)
+  - `r` = resume if paused, OR start if stopped (merge S and r)
+  - `p` = pause (unchanged)
+  - Remove capital `S` keybinding
+  - Update footer hints and help screen
+
+## Phase 10: Terminal Interaction Improvements
+
+- [ ] **10.1 Implement terminal copy mode**
+  - Add `copy_mode: bool` to App state
+  - Enter copy mode with a keybinding (e.g., `[` or `y` when focused)
+  - In copy mode: arrow keys move cursor, shift+arrows select text
+  - `y` or `Enter` copies selection to clipboard
+  - `Esc` or `q` exits copy mode
+  - Use `arboard` or `clipboard` crate for clipboard access
+
+- [ ] **10.2 Add visual selection in copy mode**
+  - Track selection start/end positions
+  - Render selection with inverted colors or highlight
+  - Show "COPY MODE" indicator in terminal title
+
+- [ ] **10.3 Add mouse wheel scrolling for terminal pane**
+  - Enable mouse capture: `crossterm::event::EnableMouseCapture`
+  - When output_focused, handle `MouseEvent::ScrollUp/ScrollDown`
+  - Implement scroll offset in terminal rendering
+  - Track `scroll_offset` per agent
+  - Scroll through vt100 scrollback buffer
+
+- [ ] **10.4 Add left pane scrolling for agent list**
+  - Track `list_scroll_offset` in App
+  - When agent count exceeds visible area, enable scrolling
+  - Arrow keys (j/k) already move selection; auto-scroll to keep selected visible
+  - Ensure selected agent is always visible in the viewport
+  - Show scroll indicators (▲/▼) when more items above/below
+
+## Phase 11: Full Terminal Takeover
+
+- [ ] **11.1 Verify alternate screen usage**
+  - Confirm `EnterAlternateScreen` is used in main.rs (already done)
+  - Ensure no stdout writes outside of ratatui rendering
+  - Test that scrollback is isolated from cockpit UI
+
+- [ ] **11.2 Disable terminal scrollback during run**
+  - The alternate screen should already isolate scrollback
+  - If needed, add explicit terminal mode settings
+  - Test with various terminal emulators (iTerm, Terminal.app, kitty)
+
 ## Completion Criteria
 
 All items checked. Application:
@@ -187,3 +264,6 @@ All items checked. Application:
 - Shows real Claude output
 - Can send instructions to loops
 - Persists state across restarts
+- Supports Claude instances (no prompt, no loop)
+- Has copy mode for terminal output
+- Scrollable agent list and terminal pane

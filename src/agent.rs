@@ -4,11 +4,31 @@
 
 use crate::loop_manager::{LoopError, RalphLoop, TerminalData};
 use ratatui::style::Color;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc;
+
+/// Type of agent: RalphLoop (has PROMPT.md, loops continuously) vs ClaudeInstance (no prompt, single run)
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub enum AgentType {
+    /// A ralph loop with PROMPT.md that runs continuously
+    #[default]
+    RalphLoop,
+    /// A single Claude instance without a prompt file (no auto-restart)
+    ClaudeInstance,
+}
+
+impl fmt::Display for AgentType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AgentType::RalphLoop => write!(f, "Ralph Loop"),
+            AgentType::ClaudeInstance => write!(f, "Claude Instance"),
+        }
+    }
+}
 
 /// Errors that can occur when managing agents
 #[derive(Debug)]
@@ -79,6 +99,8 @@ pub struct Agent {
     /// The target repo root where the agent executes commands
     pub working_dir: Option<PathBuf>,
     pub ralph_loop: Option<RalphLoop>,
+    /// Type of agent: RalphLoop or ClaudeInstance
+    pub agent_type: AgentType,
 }
 
 impl Agent {
@@ -92,10 +114,16 @@ impl Agent {
             project_path: None,
             working_dir: None,
             ralph_loop: None,
+            agent_type: AgentType::default(),
         }
     }
 
-    pub fn with_project(name: &str, project_path: PathBuf, working_dir: PathBuf) -> Self {
+    pub fn with_project(
+        name: &str,
+        project_path: PathBuf,
+        working_dir: PathBuf,
+        agent_type: AgentType,
+    ) -> Self {
         Self {
             name: name.to_string(),
             status: AgentStatus::Stopped,
@@ -105,6 +133,7 @@ impl Agent {
             project_path: Some(project_path),
             working_dir: Some(working_dir),
             ralph_loop: None,
+            agent_type,
         }
     }
 

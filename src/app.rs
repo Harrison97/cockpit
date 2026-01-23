@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use crate::agent::{Agent, AgentStatus};
+use crate::agent::{Agent, AgentStatus, AgentType};
 use crate::loop_manager::TerminalData;
 use crate::persistence::{load_state, save_state, LoopState, PersistedState};
 use crate::project::RalphProject;
@@ -317,7 +317,12 @@ impl App {
 
         match RalphProject::create(project_path.clone(), &prompt_content) {
             Ok(_project) => {
-                let agent = Agent::with_project(&agent_name, project_path, working_dir);
+                let agent = Agent::with_project(
+                    &agent_name,
+                    project_path,
+                    working_dir,
+                    AgentType::RalphLoop,
+                );
                 self.agents.push(agent);
                 self.selected_index = self.agents.len() - 1;
                 self.status_message = Some(format!("Created loop: {}", agent_name));
@@ -594,6 +599,7 @@ impl App {
                     project_path: project_path.clone(),
                     working_dir: agent.working_dir.clone(),
                     last_iteration: agent.iteration,
+                    agent_type: agent.agent_type,
                 });
             }
         }
@@ -641,8 +647,12 @@ fn load_agents_from_state() -> Vec<Agent> {
                         .map(|p| p.to_path_buf())
                         .unwrap_or_else(|| loop_state.project_path.clone())
                 });
-                let mut agent =
-                    Agent::with_project(&loop_state.name, loop_state.project_path, working_dir);
+                let mut agent = Agent::with_project(
+                    &loop_state.name,
+                    loop_state.project_path,
+                    working_dir,
+                    loop_state.agent_type,
+                );
                 agent.iteration = loop_state.last_iteration;
                 agent
             })
