@@ -462,10 +462,100 @@ impl Agent {
         self.ralph_loop.as_ref().and_then(|rl| rl.pid())
     }
 
-    /// Find all matches of a search query in terminal content.
-    /// Returns Vec of (row, column_start, match_length) where row is the
-    /// display row (0 = top of visible area) and column is the terminal column.
-    pub fn find_matches(&self, query: &str) -> Vec<(usize, usize, usize)> {
+    /// Find all matches of a search query in the ENTIRE terminal scrollback.
+    /// Returns Vec of (absolute_row, column_start, match_length) where absolute_row
+    /// is the row from the top of the entire history (0 = oldest line).
+    /// Also returns the max_scrollback value for scroll calculations.
+    pub fn find_all_matches(&self, query: &str) -> (Vec<(usize, usize, usize)>, usize) {
+        if query.is_empty() {
+            return (Vec::new(), 0);
+        }
+
+        let mut matches = Vec::new();
+        let query_lower = query.to_lowercase();
+        let query_chars: Vec<char> = query_lower.chars().collect();
+
+        if let Ok(mut term) = self.terminal.lock() {
+            let terminal_height = self.last_size.0 as usize;
+
+            // Get max scrollback
+            term.set_scrollback(usize::MAX);
+            let scrollback_max = term.screen().scrollback();
+            let safe_max = scrollback_max.min(terminal_height.saturating_sub(1));
+
+            let screen = term.screen();
+            let rows = screen.size().0 as usize;
+            let cols = screen.size().1 as usize;
+
+            // Search at each scroll position from top (oldest) to bottom (newest)
+            // We iterate from max scroll (oldest visible) down to 0 (newest)
+            for scroll_pos in (0..=safe_max).rev() {
+                term.set_scrollback(scroll_pos);
+                let screen = term.screen();
+
+                for row in 0..rows {
+                    // Calculate absolute row: higher scroll_pos = older content
+                    // At scroll_pos=safe_max, row 0 is the oldest line (absolute 0)
+                    // At scroll_pos=0, row 0 is at absolute position (safe_max)
+                    let absolute_row = safe_max - scroll_pos + row;
+
+                    // Build a vector of (column, char) for this row
+                    let mut row_chars: Vec<(usize, char)> = Vec::new();
+                    for col in 0..cols {
+                        if let Some(cell) = screen.cell(row as u16, col as u16) {
+                            let contents = cell.contents();
+                            for c in contents.chars() {
+                                row_chars.push((col, c));
+                            }
+                        }
+                    }
+
+                    // Search for query in this row's characters
+                    let row_chars_lower: Vec<char> = row_chars
+                        .iter()
+                        .map(|(_, c)| c.to_lowercase().next().unwrap_or(*c))
+                        .collect();
+
+                    for start_idx in 0..row_chars_lower.len() {
+                        if start_idx + query_chars.len() > row_chars_lower.len() {
+                            break;
+                        }
+
+                        let mut found = true;
+                        for (i, qc) in query_chars.iter().enumerate() {
+                            if row_chars_lower[start_idx + i] != *qc {
+                                found = false;
+                                break;
+                            }
+                        }
+
+                        if found {
+                            let col = row_chars[start_idx].0;
+                            // Only add if we haven't already found this match
+                            // (avoid duplicates from overlapping scroll windows)
+                            if matches
+                                .last()
+                                .is_none_or(|&(r, c, _)| r != absolute_row || c != col)
+                            {
+                                matches.push((absolute_row, col, query.len()));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Reset scrollback
+            term.set_scrollback(0);
+
+            return (matches, safe_max);
+        }
+
+        (matches, 0)
+    }
+
+    /// Find matches in the currently visible terminal content only.
+    /// Returns Vec of (row, column_start, match_length) where row is relative to visible area.
+    pub fn find_visible_matches(&self, query: &str) -> Vec<(usize, usize, usize)> {
         if query.is_empty() {
             return Vec::new();
         }
@@ -475,8 +565,6 @@ impl Agent {
         let query_chars: Vec<char> = query_lower.chars().collect();
 
         if let Ok(mut term) = self.terminal.lock() {
-            // Apply the same scroll offset that will be used for rendering
-            // This ensures we search the same content that's displayed
             let terminal_height = self.last_size.0 as usize;
 
             // Get max scrollback
@@ -493,20 +581,16 @@ impl Agent {
             let cols = screen.size().1 as usize;
 
             for row in 0..rows {
-                // Build a vector of (column, char) for this row
                 let mut row_chars: Vec<(usize, char)> = Vec::new();
                 for col in 0..cols {
                     if let Some(cell) = screen.cell(row as u16, col as u16) {
                         let contents = cell.contents();
-                        // Each cell maps to one column position
-                        // Wide chars have content in first cell, empty in continuation
                         for c in contents.chars() {
                             row_chars.push((col, c));
                         }
                     }
                 }
 
-                // Search for query in this row's characters
                 let row_chars_lower: Vec<char> = row_chars
                     .iter()
                     .map(|(_, c)| c.to_lowercase().next().unwrap_or(*c))
@@ -526,17 +610,58 @@ impl Agent {
                     }
 
                     if found {
-                        // Get the actual column position from the first matched character
                         let col = row_chars[start_idx].0;
                         matches.push((row, col, query.len()));
                     }
                 }
             }
 
-            // Reset scrollback to 0 to not affect other operations
             term.set_scrollback(0);
         }
 
         matches
+    }
+
+    /// Scroll to show a specific absolute row (centered if possible)
+    pub fn scroll_to_absolute_row(&mut self, absolute_row: usize) {
+        if let Ok(mut term) = self.terminal.lock() {
+            let terminal_height = self.last_size.0 as usize;
+
+            // Get max scrollback
+            term.set_scrollback(usize::MAX);
+            let scrollback_max = term.screen().scrollback();
+            let safe_max = scrollback_max.min(terminal_height.saturating_sub(1));
+
+            // Calculate scroll_offset to center the absolute_row
+            // absolute_row = safe_max - scroll_offset + visible_row
+            // We want visible_row to be around terminal_height/2
+            // So: scroll_offset = safe_max - absolute_row + terminal_height/2
+            let center_offset = terminal_height / 2;
+            let target_offset = if absolute_row + center_offset > safe_max {
+                safe_max.saturating_sub(absolute_row + center_offset - safe_max)
+            } else {
+                safe_max
+                    .saturating_sub(absolute_row)
+                    .saturating_sub(center_offset)
+            };
+
+            // Clamp to valid range
+            let new_offset = target_offset.min(safe_max);
+            self.scroll_offset = new_offset as u16;
+            term.set_scrollback(new_offset);
+        }
+    }
+
+    /// Get the current scroll state for match position calculations
+    pub fn get_scroll_state(&self) -> (usize, usize) {
+        if let Ok(mut term) = self.terminal.lock() {
+            let terminal_height = self.last_size.0 as usize;
+            term.set_scrollback(usize::MAX);
+            let scrollback_max = term.screen().scrollback();
+            let safe_max = scrollback_max.min(terminal_height.saturating_sub(1));
+            term.set_scrollback(0);
+            return (self.scroll_offset as usize, safe_max);
+        }
+        (0, 0)
     }
 }

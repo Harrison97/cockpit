@@ -63,9 +63,13 @@ pub struct App {
     pub list_scroll_offset: usize,
     /// Current search mode for terminal Ctrl+F search
     pub search_mode: SearchMode,
-    /// Search match positions as (line, column) in the scrollback buffer
+    /// Visible search match positions as (line, column) - for highlighting only
     pub search_matches: Vec<(usize, usize)>,
-    /// Index of the currently highlighted match in search_matches
+    /// Absolute search match positions as (absolute_row, column, length) - for navigation
+    search_matches_absolute: Vec<(usize, usize, usize)>,
+    /// Max scrollback value when absolute matches were calculated
+    search_max_scrollback: usize,
+    /// Index of the currently highlighted match in search_matches_absolute
     pub search_current: usize,
 }
 
@@ -93,6 +97,8 @@ impl App {
             list_scroll_offset: 0,
             search_mode: SearchMode::Off,
             search_matches: Vec::new(),
+            search_matches_absolute: Vec::new(),
+            search_max_scrollback: 0,
             search_current: 0,
         }
     }
@@ -315,25 +321,38 @@ impl App {
         }
     }
 
-    /// Jump to the next search match
+    /// Jump to the next search match and scroll to center it
     fn search_next_match(&mut self) {
-        if self.search_matches.is_empty() {
+        if self.search_matches_absolute.is_empty() {
             return;
         }
         // Cycle to next match
-        self.search_current = (self.search_current + 1) % self.search_matches.len();
+        self.search_current = (self.search_current + 1) % self.search_matches_absolute.len();
+        self.scroll_to_current_match();
     }
 
-    /// Jump to the previous search match
+    /// Jump to the previous search match and scroll to center it
     fn search_prev_match(&mut self) {
-        if self.search_matches.is_empty() {
+        if self.search_matches_absolute.is_empty() {
             return;
         }
         // Cycle to previous match
         if self.search_current == 0 {
-            self.search_current = self.search_matches.len() - 1;
+            self.search_current = self.search_matches_absolute.len() - 1;
         } else {
             self.search_current -= 1;
+        }
+        self.scroll_to_current_match();
+    }
+
+    /// Scroll the terminal to center the current match
+    fn scroll_to_current_match(&mut self) {
+        if let Some(&(abs_row, _, _)) = self.search_matches_absolute.get(self.search_current) {
+            if let Some(agent) = self.selected_agent_mut() {
+                agent.scroll_to_absolute_row(abs_row);
+            }
+            // Update visible matches after scrolling
+            self.update_visible_from_absolute();
         }
     }
 
@@ -372,31 +391,69 @@ impl App {
             self.save_state();
         }
 
-        // Refresh search matches if in search mode (handles scrolling/new content)
-        if let Some(query) = self.search_query().map(|s| s.to_string()) {
+        // Only refresh visible matches during Searching mode (as user types)
+        // In Navigating mode, we keep stable absolute matches
+        if let SearchMode::Searching(ref query) = self.search_mode {
             if !query.is_empty() {
-                self.refresh_search_matches(&query);
+                let query = query.clone();
+                self.refresh_visible_matches(&query);
             }
         }
     }
 
-    /// Refresh search matches without changing the query (for scroll/content updates)
-    fn refresh_search_matches(&mut self, query: &str) {
+    /// Refresh visible matches for highlighting (used during Searching mode)
+    fn refresh_visible_matches(&mut self, query: &str) {
         if let Some(agent) = self.selected_agent() {
             let matches: Vec<(usize, usize)> = agent
-                .find_matches(query)
+                .find_visible_matches(query)
                 .into_iter()
                 .map(|(line, col, _len)| (line, col))
                 .collect();
 
             self.search_matches = matches;
+        }
+    }
 
-            // Keep current index in bounds
-            if self.search_matches.is_empty() {
+    /// Calculate and store all absolute matches for navigation
+    fn calculate_absolute_matches(&mut self, query: &str) {
+        if let Some(agent) = self.selected_agent() {
+            let (matches, max_scroll) = agent.find_all_matches(query);
+            self.search_matches_absolute = matches;
+            self.search_max_scrollback = max_scroll;
+
+            // Set current to last match (closest to bottom/newest content)
+            if !self.search_matches_absolute.is_empty() {
+                self.search_current = self.search_matches_absolute.len() - 1;
+            } else {
                 self.search_current = 0;
-            } else if self.search_current >= self.search_matches.len() {
-                self.search_current = self.search_matches.len() - 1;
             }
+        }
+    }
+
+    /// Update visible matches to reflect which matches are on screen at current scroll position
+    fn update_visible_from_absolute(&mut self) {
+        if let Some(agent) = self.selected_agent() {
+            let (scroll_offset, safe_max) = agent.get_scroll_state();
+            let terminal_height = agent.terminal_height() as usize;
+
+            // Calculate which absolute rows are visible
+            // At scroll_offset, visible rows are: safe_max - scroll_offset to safe_max - scroll_offset + terminal_height
+            let visible_start = safe_max.saturating_sub(scroll_offset);
+            let visible_end = visible_start + terminal_height;
+
+            self.search_matches = self
+                .search_matches_absolute
+                .iter()
+                .filter_map(|&(abs_row, col, _len)| {
+                    if abs_row >= visible_start && abs_row < visible_end {
+                        // Convert absolute row to visible row
+                        let visible_row = abs_row - visible_start;
+                        Some((visible_row, col))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
         }
     }
 
@@ -823,6 +880,10 @@ impl App {
                         // Confirm search and switch to navigation mode
                         if !query.is_empty() {
                             let query = query.clone();
+                            // Calculate all absolute matches for navigation
+                            self.calculate_absolute_matches(&query);
+                            // Update visible matches for current scroll position
+                            self.update_visible_from_absolute();
                             self.search_mode = SearchMode::Navigating(query);
                         } else {
                             // Empty query - exit search
@@ -877,31 +938,37 @@ impl App {
                     // Scroll down one line (j or Down arrow)
                     KeyCode::Char('j') | KeyCode::Down => {
                         self.scroll_terminal_down(1);
+                        self.update_visible_from_absolute();
                         true
                     }
                     // Scroll up one line (k or Up arrow)
                     KeyCode::Char('k') | KeyCode::Up => {
                         self.scroll_terminal_up(1);
+                        self.update_visible_from_absolute();
                         true
                     }
                     // Half-page down (Ctrl+D)
                     KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
                         self.scroll_terminal_half_page_down();
+                        self.update_visible_from_absolute();
                         true
                     }
                     // Half-page up (Ctrl+U)
                     KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
                         self.scroll_terminal_half_page_up();
+                        self.update_visible_from_absolute();
                         true
                     }
                     // Go to top of history
                     KeyCode::Char('g') => {
                         self.scroll_terminal_to_top();
+                        self.update_visible_from_absolute();
                         true
                     }
                     // Go to bottom of history (Shift+G)
                     KeyCode::Char('G') => {
                         self.scroll_terminal_to_bottom();
+                        self.update_visible_from_absolute();
                         true
                     }
                     _ => false,
@@ -910,7 +977,7 @@ impl App {
         }
     }
 
-    /// Update search matches based on current query
+    /// Update search matches based on current query (used during Searching mode)
     fn update_search_matches(&mut self, query: &str) {
         if query.is_empty() {
             self.search_matches.clear();
@@ -919,10 +986,9 @@ impl App {
         }
 
         if let Some(agent) = self.selected_agent() {
-            // Find all matches - agent.find_matches returns (line, col, len)
-            // We store (line, col) for compatibility with existing structure
+            // Find visible matches for highlighting during search
             let matches: Vec<(usize, usize)> = agent
-                .find_matches(query)
+                .find_visible_matches(query)
                 .into_iter()
                 .map(|(line, col, _len)| (line, col))
                 .collect();
@@ -942,6 +1008,8 @@ impl App {
     fn exit_search_mode(&mut self) {
         self.search_mode = SearchMode::Off;
         self.search_matches.clear();
+        self.search_matches_absolute.clear();
+        self.search_max_scrollback = 0;
         self.search_current = 0;
     }
 
