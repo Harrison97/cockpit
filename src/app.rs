@@ -4,11 +4,12 @@
 
 use crate::agent::{Agent, AgentStatus, AgentType};
 use crate::loop_manager::TerminalData;
-use crate::persistence::{load_state, save_state, LoopState, PersistedState};
+use crate::persistence::{get_agents_dir, load_state, save_state, LoopState, PersistedState};
 use crate::project::RalphProject;
 use std::path::PathBuf;
 use std::time::Instant;
 use tokio::sync::mpsc;
+use tracing::{info, warn};
 
 /// Input mode determines what kind of input the user is currently providing
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -265,6 +266,7 @@ impl App {
             self.selected_index = self.agents.len() - 1;
         }
 
+        info!(name = %name, "agent deleted");
         self.status_message = Some(format!("Removed: {}", name));
         self.save_state();
     }
@@ -416,6 +418,11 @@ impl App {
 
             self.search_matches = matches;
         }
+    }
+
+    /// Get the total count of matches in full history
+    pub fn search_matches_absolute_count(&self) -> usize {
+        self.search_matches_absolute.len()
     }
 
     /// Calculate and store all absolute matches for navigation
@@ -574,10 +581,10 @@ impl App {
             AgentType::RalphLoop
         };
 
-        let agents_dir = base_path.join(".agents");
+        let agents_dir = get_agents_dir();
         let project_path = agents_dir.join(&agent_name);
 
-        // Defense-in-depth: verify the resolved path stays within .agents directory
+        // Defense-in-depth: verify the resolved path stays within agents directory
         // This catches any path traversal that might have slipped through name validation
         let resolved_project = project_path.canonicalize().unwrap_or_else(|_| {
             // If path doesn't exist yet, check parent exists and construct expected path
@@ -612,10 +619,12 @@ impl App {
                     AgentType::ClaudeInstance => "Claude instance",
                     AgentType::RalphLoop => "Ralph loop",
                 };
+                info!(name = %agent_name, agent_type = type_label, "agent created");
                 self.status_message = Some(format!("Created {}: {}", type_label, agent_name));
                 self.save_state();
             }
             Err(e) => {
+                warn!(error = %e, name = %agent_name, "failed to create agent");
                 self.status_message = Some(format!("Failed to create project: {}", e));
             }
         }
@@ -1072,7 +1081,7 @@ impl App {
         }
 
         if let Err(e) = save_state(&state) {
-            eprintln!("Failed to save state: {}", e);
+            warn!(error = %e, "failed to save state");
         }
     }
 
@@ -1125,7 +1134,7 @@ fn load_agents_from_state() -> Vec<Agent> {
             })
             .collect(),
         Err(e) => {
-            eprintln!("Failed to load state: {}", e);
+            warn!(error = %e, "failed to load state");
             Vec::new()
         }
     }

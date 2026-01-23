@@ -1,3 +1,15 @@
 /target
+
+# Cockpit runtime data
+.cockpit/
+
+# Legacy paths (can be removed after migration)
 .agents/
 prompts/
+
+# Profiling artifacts
+*.svg
+perf.data*
+
+# OS files
+.DS_Store

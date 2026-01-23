@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc;
+use tracing::warn;
 
 /// Type of agent: RalphLoop (has PROMPT.md, loops continuously) vs ClaudeInstance (no prompt, single run)
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
@@ -260,7 +261,7 @@ impl Agent {
         // Create parent directories if needed
         if let Some(parent) = path.parent() {
             if let Err(e) = fs::create_dir_all(parent) {
-                eprintln!("Failed to create history directory: {}", e);
+                warn!(error = %e, path = ?parent, "failed to create history directory");
                 return None;
             }
         }
@@ -269,7 +270,7 @@ impl Agent {
         match OpenOptions::new().create(true).append(true).open(&path) {
             Ok(file) => Some(file),
             Err(e) => {
-                eprintln!("Failed to open history file: {}", e);
+                warn!(error = %e, path = ?path, "failed to open history file");
                 None
             }
         }
@@ -649,8 +650,6 @@ impl Agent {
         let query_chars: Vec<char> = query_lower.chars().collect();
 
         if let Ok(mut term) = self.terminal.lock() {
-            let terminal_height = self.last_size.0 as usize;
-
             // Get max scrollback
             term.set_scrollback(usize::MAX);
             let scrollback_max = term.screen().scrollback();
@@ -658,10 +657,8 @@ impl Agent {
             let rows = term.screen().size().0 as usize;
             let cols = term.screen().size().1 as usize;
 
-            // vt100 limitation: set_scrollback(N) can only show up to terminal_height
-            // lines of scrollback at a time. To search the full buffer, we iterate
-            // through it in chunks by setting different scrollback values.
-            let render_max = terminal_height.min(scrollback_max);
+            // For full buffer search, use the full scrollback max
+            let render_max = scrollback_max;
 
             // Helper to search a single row and add matches (returns true if limit reached)
             let search_row = |term: &vt100::Parser,
@@ -749,7 +746,10 @@ impl Agent {
 
     /// Find matches in the currently visible terminal content only.
     /// Returns Vec of (row, column_start, match_length) where row is relative to visible area.
-    /// Uses the current scroll_offset that was set by scroll_up/scroll_down.
+    ///
+    /// NOTE: Due to a vt100 crate limitation, this only works correctly when
+    /// scroll_offset <= terminal_height. For larger offsets, we search at the
+    /// maximum safe offset.
     pub fn find_visible_matches(&self, query: &str) -> Vec<(usize, usize, usize)> {
         if query.is_empty() {
             return Vec::new();
@@ -760,18 +760,21 @@ impl Agent {
         let query_chars: Vec<char> = query_lower.chars().collect();
 
         if let Ok(mut term) = self.terminal.lock() {
-            // Use the current scroll_offset - don't recalculate
-            // This ensures we search the same content that will be rendered
-            term.set_scrollback(self.scroll_offset as usize);
-
             let screen = term.screen();
             let rows = screen.size().0 as usize;
             let cols = screen.size().1 as usize;
 
+            if rows == 0 || cols == 0 {
+                return Vec::new();
+            }
+
+            // Set scrollback offset for search
+            term.set_scrollback(self.scroll_offset as usize);
+
             for row in 0..rows {
                 let mut row_chars: Vec<(usize, char)> = Vec::new();
                 for col in 0..cols {
-                    if let Some(cell) = screen.cell(row as u16, col as u16) {
+                    if let Some(cell) = term.screen().cell(row as u16, col as u16) {
                         let contents = cell.contents();
                         for c in contents.chars() {
                             row_chars.push((col, c));
@@ -803,6 +806,9 @@ impl Agent {
                     }
                 }
             }
+
+            // Reset scrollback to 0 to avoid affecting other operations
+            term.set_scrollback(0);
         }
 
         matches

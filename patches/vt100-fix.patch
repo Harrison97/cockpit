@@ -1,0 +1,22 @@
+--- a/src/grid.rs
++++ b/src/grid.rs
+@@ -119,10 +119,14 @@ impl Grid {
+     pub fn visible_rows(&self) -> impl Iterator<Item = &crate::row::Row> {
+         let scrollback_len = self.scrollback.len();
+         let rows_len = self.rows.len();
++        
++        // Calculate how many lines to show from each source
++        let from_scrollback = self.scrollback_offset.min(scrollback_len);
++        let from_screen = rows_len.saturating_sub(self.scrollback_offset);
++        let scrollback_start = scrollback_len.saturating_sub(from_scrollback);
++        
+         self.scrollback
+             .iter()
+-            .skip(scrollback_len - self.scrollback_offset)
+-            .chain(self.rows.iter().take(rows_len - self.scrollback_offset))
++            .skip(scrollback_start)
++            .take(from_scrollback)
++            .chain(self.rows.iter().take(from_screen))
+     }
+ 
+     pub fn drawing_rows(&self) -> impl Iterator<Item = &crate::row::Row> {

@@ -1,35 +1,46 @@
 //! Persistence module for Cockpit state
 //!
 //! Handles saving/loading application state to disk.
+//!
+//! Folder structure:
+//!   .cockpit/           - project-local cockpit directory
+//!   .cockpit/agents/    - agent data and prompts
+//!   .cockpit/logs/      - timestamped log files
+//!   .cockpit/state.json - persisted application state
 
 #![allow(dead_code)]
 
 use crate::agent::AgentType;
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-const APP_NAME: &str = "cockpit";
+const COCKPIT_DIR: &str = ".cockpit";
+const AGENTS_DIR: &str = "agents";
+const LOGS_DIR: &str = "logs";
 const STATE_FILE: &str = "state.json";
 
-pub fn get_data_dir() -> Option<PathBuf> {
-    if let Some(proj_dirs) = ProjectDirs::from("", "", APP_NAME) {
-        Some(proj_dirs.data_dir().to_path_buf())
-    } else {
-        dirs_fallback()
-    }
+/// Get the base .cockpit directory in the current working directory
+pub fn get_cockpit_dir() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(COCKPIT_DIR)
 }
 
-fn dirs_fallback() -> Option<PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(|home| PathBuf::from(home).join(format!(".{}", APP_NAME)))
+/// Get the agents directory (.cockpit/agents/)
+pub fn get_agents_dir() -> PathBuf {
+    get_cockpit_dir().join(AGENTS_DIR)
 }
 
-pub fn get_state_file_path() -> Option<PathBuf> {
-    get_data_dir().map(|dir| dir.join(STATE_FILE))
+/// Get the logs directory (.cockpit/logs/)
+pub fn get_logs_dir() -> PathBuf {
+    get_cockpit_dir().join(LOGS_DIR)
+}
+
+/// Get the state file path (.cockpit/state.json)
+pub fn get_state_file_path() -> PathBuf {
+    get_cockpit_dir().join(STATE_FILE)
 }
 
 /// State of a single loop persisted to disk
@@ -72,12 +83,7 @@ impl PersistedState {
 }
 
 pub fn save_state(state: &PersistedState) -> io::Result<()> {
-    let state_path = get_state_file_path().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "Could not determine state file path",
-        )
-    })?;
+    let state_path = get_state_file_path();
 
     if let Some(parent) = state_path.parent() {
         fs::create_dir_all(parent)?;
@@ -100,12 +106,7 @@ pub fn save_state(state: &PersistedState) -> io::Result<()> {
 }
 
 pub fn load_state() -> io::Result<PersistedState> {
-    let state_path = get_state_file_path().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "Could not determine state file path",
-        )
-    })?;
+    let state_path = get_state_file_path();
 
     if !state_path.exists() {
         return Ok(PersistedState::new());
@@ -127,15 +128,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_get_data_dir_is_some() {
-        let dir = get_data_dir();
-        assert!(dir.is_some() || std::env::var("HOME").is_err());
+    fn test_cockpit_dir_ends_with_cockpit() {
+        let dir = get_cockpit_dir();
+        assert!(dir.ends_with(".cockpit"));
+    }
+
+    #[test]
+    fn test_agents_dir_structure() {
+        let dir = get_agents_dir();
+        assert!(dir.ends_with(".cockpit/agents"));
     }
 
     #[test]
     fn test_state_file_path_ends_with_state_json() {
-        if let Some(path) = get_state_file_path() {
-            assert!(path.ends_with("state.json"));
-        }
+        let path = get_state_file_path();
+        assert!(path.ends_with(".cockpit/state.json"));
     }
 }

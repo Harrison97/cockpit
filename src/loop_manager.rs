@@ -1,15 +1,17 @@
 #![allow(dead_code)]
 #![allow(clippy::too_many_arguments)]
 
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use pty_process::{open as open_pty, Command as PtyCommand, Size};
 use regex::Regex;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 use thiserror::Error;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, warn};
 
 /// Errors that can occur when managing ralph loops
 #[derive(Error, Debug)]
@@ -71,7 +73,7 @@ impl TerminalData {
 pub struct OutputLine {
     pub agent_name: String,
     pub line: String,
-    pub timestamp: Instant,
+    pub timestamp: std::time::Instant,
 }
 
 #[allow(dead_code)]
@@ -80,7 +82,7 @@ impl OutputLine {
         Self {
             agent_name,
             line,
-            timestamp: Instant::now(),
+            timestamp: std::time::Instant::now(),
         }
     }
 }
@@ -143,8 +145,19 @@ fn is_claude_installed() -> bool {
 /// How long to wait with no output before considering Claude "idle"
 const IDLE_TIMEOUT_SECS: u64 = 2;
 
+/// Commands sent to the PTY management task
+#[derive(Debug)]
+enum PtyCmd {
+    /// Send input bytes to the PTY
+    Input(Vec<u8>),
+    /// Resize the PTY
+    Resize { rows: u16, cols: u16 },
+}
+
 /// Manages a ralph loop using PTY for full terminal emulation.
 /// Auto-restarts when Claude becomes idle (unless paused).
+///
+/// This implementation uses tokio throughout for proper async cancellation.
 pub struct RalphLoop {
     /// The agent's internal directory where PROMPT.md lives
     pub project_path: PathBuf,
@@ -152,15 +165,16 @@ pub struct RalphLoop {
     pub working_dir: PathBuf,
     /// True for ralph loops (has PROMPT.md, auto-restarts), false for Claude instances
     is_ralph_loop: bool,
-    pid: Option<u32>,
-    paused: Arc<AtomicBool>,
+    /// Cancellation token for clean shutdown
+    cancel_token: CancellationToken,
+    /// Handle to the main management task
+    task_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Channel to send commands (input, resize) to the task
+    cmd_tx: Option<mpsc::Sender<PtyCmd>>,
+    /// Shared running state (for is_running check)
     running: Arc<AtomicBool>,
-    last_activity: Arc<Mutex<Instant>>,
-    /// Writer to send input to Claude's PTY
-    pty_writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
-    /// Master PTY handle for resizing
-    pty_master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
-    reader_handle: Option<std::thread::JoinHandle<()>>,
+    /// Shared paused state
+    paused: Arc<AtomicBool>,
 }
 
 impl RalphLoop {
@@ -169,13 +183,11 @@ impl RalphLoop {
             project_path,
             working_dir,
             is_ralph_loop,
-            pid: None,
-            paused: Arc::new(AtomicBool::new(false)),
+            cancel_token: CancellationToken::new(),
+            task_handle: None,
+            cmd_tx: None,
             running: Arc::new(AtomicBool::new(false)),
-            last_activity: Arc::new(Mutex::new(Instant::now())),
-            pty_writer: Arc::new(Mutex::new(None)),
-            pty_master: Arc::new(Mutex::new(None)),
-            reader_handle: None,
+            paused: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -184,47 +196,30 @@ impl RalphLoop {
     }
 
     pub fn pid(&self) -> Option<u32> {
-        self.pid
+        // PID tracking would require additional state; return None for now
+        // The child process is managed internally by the task
+        None
     }
 
     /// Send raw input to the Claude PTY (keyboard input forwarding).
     pub fn send_input(&self, data: &[u8]) -> Result<(), LoopError> {
-        let mut writer_guard = self
-            .pty_writer
-            .lock()
-            .map_err(|e| LoopError::StdinWriteFailed(e.to_string()))?;
+        let Some(ref tx) = self.cmd_tx else {
+            return Err(LoopError::NotRunning);
+        };
 
-        let writer = writer_guard.as_mut().ok_or(LoopError::NotRunning)?;
-
-        writer
-            .write_all(data)
-            .map_err(|e| LoopError::StdinWriteFailed(e.to_string()))?;
-        writer
-            .flush()
-            .map_err(|e| LoopError::StdinWriteFailed(e.to_string()))?;
-
-        // Update activity on input too (ignore poisoning - this is optional)
-        if let Ok(mut guard) = self.last_activity.lock() {
-            *guard = Instant::now();
-        }
-
-        Ok(())
+        // Use try_send for non-blocking send from sync context
+        tx.try_send(PtyCmd::Input(data.to_vec()))
+            .map_err(|e| LoopError::StdinWriteFailed(e.to_string()))
     }
 
     /// Resize the PTY to the given dimensions.
     pub fn resize(&self, rows: u16, cols: u16) -> Result<(), LoopError> {
-        if let Ok(guard) = self.pty_master.lock() {
-            if let Some(ref master) = *guard {
-                master
-                    .resize(PtySize {
-                        rows,
-                        cols,
-                        pixel_width: 0,
-                        pixel_height: 0,
-                    })
-                    .map_err(|e| LoopError::PtyError(e.to_string()))?;
-            }
-        }
+        let Some(ref tx) = self.cmd_tx else {
+            return Ok(()); // Not running, ignore resize
+        };
+
+        // Use try_send - if channel is full, resize will be picked up later
+        let _ = tx.try_send(PtyCmd::Resize { rows, cols });
         Ok(())
     }
 
@@ -265,158 +260,171 @@ impl RalphLoop {
             return Err(LoopError::ClaudeNotFound);
         }
 
+        // Reset state
+        self.cancel_token = CancellationToken::new();
         self.running.store(true, Ordering::SeqCst);
         self.paused.store(false, Ordering::SeqCst);
-        // Reset activity timer (ignore poisoning - will be set again in thread)
-        if let Ok(mut guard) = self.last_activity.lock() {
-            *guard = Instant::now();
-        }
 
+        // Create command channel (bounded to prevent unbounded memory growth)
+        let (cmd_tx, cmd_rx) = mpsc::channel::<PtyCmd>(256);
+        self.cmd_tx = Some(cmd_tx);
+
+        // Clone state for the task
+        let cancel_token = self.cancel_token.clone();
         let running = self.running.clone();
         let paused = self.paused.clone();
-        let last_activity = self.last_activity.clone();
         let project_path = self.project_path.clone();
         let working_dir = self.working_dir.clone();
-        let pty_writer = self.pty_writer.clone();
-        let pty_master = self.pty_master.clone();
         let is_ralph_loop = self.is_ralph_loop;
 
-        let handle = std::thread::spawn(move || {
+        // Spawn the main management task
+        let handle = tokio::spawn(async move {
             Self::run_loop(
+                cancel_token,
                 running,
                 paused,
-                last_activity,
+                cmd_rx,
+                tx,
                 project_path,
                 working_dir,
                 prompt_content,
                 agent_name,
-                tx,
-                pty_writer,
-                pty_master,
                 is_ralph_loop,
                 initial_size,
-            );
+            )
+            .await;
         });
 
-        self.reader_handle = Some(handle);
+        self.task_handle = Some(handle);
         Ok(())
     }
 
-    fn run_loop(
+    /// Main loop that manages Claude iterations.
+    /// For ralph loops, restarts on idle. For Claude instances, runs once.
+    async fn run_loop(
+        cancel_token: CancellationToken,
         running: Arc<AtomicBool>,
         paused: Arc<AtomicBool>,
-        last_activity: Arc<Mutex<Instant>>,
+        mut cmd_rx: mpsc::Receiver<PtyCmd>,
+        tx: mpsc::Sender<TerminalData>,
         project_path: PathBuf,
         working_dir: PathBuf,
         prompt_content: Option<String>,
         agent_name: String,
-        tx: mpsc::Sender<TerminalData>,
-        pty_writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
-        pty_master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
         is_ralph_loop: bool,
         initial_size: (u16, u16),
     ) {
-        while running.load(Ordering::SeqCst) {
+        while !cancel_token.is_cancelled() {
             // Wait until not paused before starting a new iteration
-            while paused.load(Ordering::SeqCst) && running.load(Ordering::SeqCst) {
-                std::thread::sleep(Duration::from_millis(100));
+            while paused.load(Ordering::SeqCst) && !cancel_token.is_cancelled() {
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
 
-            if !running.load(Ordering::SeqCst) {
+            if cancel_token.is_cancelled() {
                 break;
             }
 
             let result = Self::spawn_claude_iteration(
+                &cancel_token,
+                &paused,
+                &mut cmd_rx,
+                &tx,
                 &project_path,
                 &working_dir,
                 prompt_content.as_deref(),
                 &agent_name,
-                &tx,
-                &running,
-                &paused,
-                &last_activity,
-                &pty_writer,
-                &pty_master,
                 is_ralph_loop,
                 initial_size,
-            );
+            )
+            .await;
 
             if let Err(e) = result {
                 let error_msg = format!("[ERROR] {}\r\n", e);
-                let _ = tx.blocking_send(TerminalData::new(
-                    agent_name.clone(),
-                    error_msg.into_bytes(),
-                ));
-                // Clear PTY resources on error to prevent leaks
-                // Handle poisoned mutex gracefully - we're in error recovery anyway
-                if let Ok(mut guard) = pty_writer.lock() {
-                    *guard = None;
-                }
-                if let Ok(mut guard) = pty_master.lock() {
-                    *guard = None;
-                }
+                let _ = tx
+                    .send(TerminalData::new(
+                        agent_name.clone(),
+                        error_msg.into_bytes(),
+                    ))
+                    .await;
+
                 // For Claude instances, don't retry on error - just stop
                 if !is_ralph_loop {
-                    running.store(false, Ordering::SeqCst);
                     break;
                 }
-                std::thread::sleep(Duration::from_secs(2));
+
+                // Wait before retry
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
             }
 
-            // For Claude instances, don't auto-restart - set running to false and exit
+            // For Claude instances, don't auto-restart - exit after single session
             if !is_ralph_loop {
-                running.store(false, Ordering::SeqCst);
-                let _ = tx.blocking_send(TerminalData::new(
-                    agent_name.clone(),
-                    b"\r\n[Exited]\r\n".to_vec(),
-                ));
+                let _ = tx
+                    .send(TerminalData::new(
+                        agent_name.clone(),
+                        b"\r\n[Exited]\r\n".to_vec(),
+                    ))
+                    .await;
                 break;
             }
 
-            if running.load(Ordering::SeqCst) && !paused.load(Ordering::SeqCst) {
-                let _ = tx.blocking_send(TerminalData::new(
-                    agent_name.clone(),
-                    b"\r\n[Restarting iteration...]\r\n".to_vec(),
-                ));
-                std::thread::sleep(Duration::from_secs(1));
+            // Ralph loops: announce restart and continue
+            if !cancel_token.is_cancelled() && !paused.load(Ordering::SeqCst) {
+                let _ = tx
+                    .send(TerminalData::new(
+                        agent_name.clone(),
+                        b"\r\n[Restarting iteration...]\r\n".to_vec(),
+                    ))
+                    .await;
+
+                tokio::time::sleep(Duration::from_secs(1)).await;
 
                 // Send starting marker to trigger process state transition
-                // This prevents input from bleeding into the new Claude instance
-                let _ = tx.blocking_send(TerminalData::new(
-                    agent_name.clone(),
-                    b"[Starting...]\r\n".to_vec(),
-                ));
+                let _ = tx
+                    .send(TerminalData::new(
+                        agent_name.clone(),
+                        b"[Starting...]\r\n".to_vec(),
+                    ))
+                    .await;
             }
         }
+
+        // Mark as no longer running
+        running.store(false, Ordering::SeqCst);
     }
 
-    fn spawn_claude_iteration(
+    /// Spawn and manage a single Claude iteration.
+    /// Returns when the iteration completes (child exits, idle timeout, or cancellation).
+    async fn spawn_claude_iteration(
+        cancel_token: &CancellationToken,
+        paused: &Arc<AtomicBool>,
+        cmd_rx: &mut mpsc::Receiver<PtyCmd>,
+        tx: &mpsc::Sender<TerminalData>,
         project_path: &Path,
         working_dir: &Path,
-        prompt_content: Option<&str>,
+        _prompt_content: Option<&str>,
         agent_name: &str,
-        tx: &mpsc::Sender<TerminalData>,
-        running: &Arc<AtomicBool>,
-        paused: &Arc<AtomicBool>,
-        last_activity: &Arc<Mutex<Instant>>,
-        pty_writer: &Arc<Mutex<Option<Box<dyn Write + Send>>>>,
-        pty_master: &Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
         is_ralph_loop: bool,
         initial_size: (u16, u16),
     ) -> Result<(), LoopError> {
-        let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(PtySize {
-                rows: initial_size.0,
-                cols: initial_size.1,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| LoopError::PtyError(e.to_string()))?;
+        // Validate initial size - use defaults if invalid
+        let (rows, cols) = if initial_size.0 == 0 || initial_size.1 == 0 {
+            (24, 80) // Safe defaults
+        } else {
+            initial_size
+        };
+
+        // Open PTY - returns (pty, pts) tuple in 0.5 API
+        let (pty, pts) =
+            open_pty().map_err(|e| LoopError::PtyError(format!("Failed to open PTY: {}", e)))?;
+
+        // Resize to initial size
+        pty.resize(Size::new(rows, cols)).map_err(|e| {
+            LoopError::PtyError(format!("Failed to resize PTY to {}x{}: {}", rows, cols, e))
+        })?;
 
         // Build the command based on agent type
         let cmd_str = if is_ralph_loop {
-            // Ralph loop: pipe PROMPT.md to claude
             let prompt_path = project_path.join("PROMPT.md");
             let prompt_path_str = prompt_path.to_string_lossy();
             format!(
@@ -424,195 +432,125 @@ impl RalphLoop {
                 prompt_path_str
             )
         } else {
-            // Claude instance: run claude directly without piping
             "claude --dangerously-skip-permissions".to_string()
         };
 
-        let mut cmd = CommandBuilder::new("bash");
-        cmd.arg("-c");
-        cmd.arg(&cmd_str);
-        cmd.cwd(working_dir);
+        // Spawn the child process using pty_process::Command
+        // Note: spawn() consumes both the Command and Pts in 0.5 API
+        let mut child = PtyCommand::new("bash")
+            .args(["-c", &cmd_str])
+            .current_dir(working_dir)
+            .spawn(pts)
+            .map_err(|e| LoopError::SpawnFailed(format!("Failed to spawn process: {}", e)))?;
 
-        let mut child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| LoopError::SpawnFailed(e.to_string()))?;
+        debug!(name = %agent_name, "PTY process spawned");
 
-        // Drop the slave to avoid blocking
-        drop(pair.slave);
+        // Split PTY into read and write halves for concurrent access
+        let (mut pty_read, mut pty_write) = pty.into_split();
 
-        let mut reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| LoopError::PtyError(e.to_string()))?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| LoopError::PtyError(e.to_string()))?;
+        // Track last activity for idle timeout
+        let mut last_activity = std::time::Instant::now();
 
-        // Store writer for input forwarding
-        // Handle poisoned mutex - if poisoned, we can't proceed safely
-        match pty_writer.lock() {
-            Ok(mut guard) => *guard = Some(writer),
-            Err(poisoned) => {
-                // Recover from poisoned mutex by extracting the guard
-                let mut guard = poisoned.into_inner();
-                *guard = Some(writer);
-            }
-        }
+        // Buffer for reading
+        let mut buf = [0u8; 4096];
 
-        // Store master for resizing
-        match pty_master.lock() {
-            Ok(mut guard) => *guard = Some(pair.master),
-            Err(poisoned) => {
-                let mut guard = poisoned.into_inner();
-                *guard = Some(pair.master);
-            }
-        }
+        loop {
+            tokio::select! {
+                // Priority 1: Check for cancellation
+                _ = cancel_token.cancelled() => {
+                    // Clean shutdown: kill child and exit
+                    let _ = child.kill().await;
+                    break;
+                }
 
-        // prompt_content was already validated but we pipe from file directly for ralph loops
-        let _ = prompt_content;
+                // Priority 2: Handle commands from main thread (input, resize)
+                Some(cmd) = cmd_rx.recv() => {
+                    match cmd {
+                        PtyCmd::Input(data) => {
+                            if let Err(e) = pty_write.write_all(&data).await {
+                                // Write failed, likely PTY closed
+                                let _ = tx.send(TerminalData::new(
+                                    agent_name.to_string(),
+                                    format!("\r\n[Write error: {}]\r\n", e).into_bytes(),
+                                )).await;
+                            } else {
+                                let _ = pty_write.flush().await;
+                                // Update activity on input
+                                last_activity = std::time::Instant::now();
+                            }
+                        }
+                        PtyCmd::Resize { rows, cols } => {
+                            // OwnedWritePty has a resize method
+                            let _ = pty_write.resize(Size::new(rows, cols));
+                        }
+                    }
+                }
 
-        // Reset activity timer - handle poisoned mutex gracefully
-        match last_activity.lock() {
-            Ok(mut guard) => *guard = Instant::now(),
-            Err(poisoned) => *poisoned.into_inner() = Instant::now(),
-        }
+                // Priority 3: Read output from PTY
+                result = pty_read.read(&mut buf) => {
+                    match result {
+                        Ok(0) => {
+                            // EOF - child closed the PTY
+                            let _ = tx.send(TerminalData::new(
+                                agent_name.to_string(),
+                                b"\r\n[Process exited]\r\n".to_vec(),
+                            )).await;
+                            break;
+                        }
+                        Ok(n) => {
+                            // Update activity timestamp
+                            last_activity = std::time::Instant::now();
 
-        // Read in a separate thread so we can check child status without blocking
-        let (read_tx, read_rx) = std::sync::mpsc::channel::<Vec<u8>>();
-        let reader_running = Arc::new(AtomicBool::new(true));
-        let reader_running_clone = reader_running.clone();
-
-        let reader_thread = std::thread::spawn(move || {
-            let mut buf = [0u8; 4096];
-            while reader_running_clone.load(Ordering::SeqCst) {
-                match reader.read(&mut buf) {
-                    Ok(0) => break, // EOF
-                    Ok(n) => {
-                        if read_tx.send(buf[..n].to_vec()).is_err() {
+                            // Send data to UI
+                            let _ = tx.send(TerminalData::new(
+                                agent_name.to_string(),
+                                buf[..n].to_vec(),
+                            )).await;
+                        }
+                        Err(e) => {
+                            // Read error - PTY likely closed
+                            let _ = tx.send(TerminalData::new(
+                                agent_name.to_string(),
+                                format!("\r\n[Read error: {}]\r\n", e).into_bytes(),
+                            )).await;
                             break;
                         }
                     }
-                    Err(_) => break,
                 }
-            }
-        });
 
-        // Helper to wait for child process to be reaped (prevents zombies)
-        fn wait_for_child_exit(child: &mut Box<dyn portable_pty::Child + Send + Sync>) {
-            // Wait up to 2 seconds for the child to exit gracefully
-            // If still alive after 2s, send kill signal and wait up to 1 more second
-            let wait_start = Instant::now();
-            let mut killed = false;
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) => break, // Process reaped
-                    Ok(None) => {
-                        let elapsed = wait_start.elapsed();
-                        if !killed && elapsed > Duration::from_secs(2) {
-                            // Timeout - force kill
-                            let _ = child.kill();
-                            killed = true;
-                        } else if killed && elapsed > Duration::from_secs(3) {
-                            // Give up after 3s total (2s grace + 1s after kill)
-                            // Process will become zombie but we won't hang
+                // Priority 4: Periodic checks (child status, idle timeout)
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                    // Check if child has exited
+                    if let Ok(Some(status)) = child.try_wait() {
+                        let _ = tx.send(TerminalData::new(
+                            agent_name.to_string(),
+                            format!("\r\n[Process exited with status: {}]\r\n", status).into_bytes(),
+                        )).await;
+                        break;
+                    }
+
+                    // Only apply idle timeout for ralph loops, not Claude instances
+                    if is_ralph_loop {
+                        let idle_duration = last_activity.elapsed();
+                        if !paused.load(Ordering::SeqCst)
+                            && idle_duration > Duration::from_secs(IDLE_TIMEOUT_SECS)
+                        {
+                            let _ = tx.send(TerminalData::new(
+                                agent_name.to_string(),
+                                format!("\r\n[Idle for {}s, restarting...]\r\n", IDLE_TIMEOUT_SECS)
+                                    .into_bytes(),
+                            )).await;
+                            let _ = child.kill().await;
                             break;
                         }
-                        std::thread::sleep(Duration::from_millis(10));
                     }
-                    Err(_) => break, // Error, assume reaped
                 }
             }
         }
 
-        // Main loop: check for data, child exit, idle timeout
-        loop {
-            if !running.load(Ordering::SeqCst) {
-                let _ = child.kill();
-                wait_for_child_exit(&mut child);
-                break;
-            }
-
-            // Check if child has exited
-            if let Ok(Some(_status)) = child.try_wait() {
-                // Drain any remaining output
-                while let Ok(data) = read_rx.try_recv() {
-                    let _ = tx.blocking_send(TerminalData::new(agent_name.to_string(), data));
-                }
-                let _ = tx.blocking_send(TerminalData::new(
-                    agent_name.to_string(),
-                    b"\r\n[Process exited]\r\n".to_vec(),
-                ));
-                break;
-            }
-
-            // Only apply idle timeout for ralph loops, not Claude instances
-            if is_ralph_loop {
-                let idle_duration = match last_activity.lock() {
-                    Ok(guard) => guard.elapsed(),
-                    Err(poisoned) => poisoned.into_inner().elapsed(),
-                };
-                if !paused.load(Ordering::SeqCst)
-                    && idle_duration > Duration::from_secs(IDLE_TIMEOUT_SECS)
-                {
-                    let _ = tx.blocking_send(TerminalData::new(
-                        agent_name.to_string(),
-                        format!("\r\n[Idle for {}s, restarting...]\r\n", IDLE_TIMEOUT_SECS)
-                            .into_bytes(),
-                    ));
-                    let _ = child.kill();
-                    wait_for_child_exit(&mut child);
-                    break;
-                }
-            }
-
-            // Check for data with timeout
-            match read_rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(data) => {
-                    match last_activity.lock() {
-                        Ok(mut guard) => *guard = Instant::now(),
-                        Err(poisoned) => *poisoned.into_inner() = Instant::now(),
-                    }
-                    let _ = tx.blocking_send(TerminalData::new(agent_name.to_string(), data));
-                }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    // No data, continue checking child status
-                }
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    // Reader thread exited
-                    break;
-                }
-            }
-        }
-
-        // Stop reader thread with timeout to avoid hanging indefinitely
-        reader_running.store(false, Ordering::SeqCst);
-        // Wait for reader thread with a timeout
-        // We check is_finished in a loop, then join once it's done
-        let join_start = Instant::now();
-        loop {
-            if reader_thread.is_finished() {
-                let _ = reader_thread.join();
-                break;
-            }
-            if join_start.elapsed() >= Duration::from_secs(2) {
-                // Timeout - abandon the thread (it will be cleaned up when it exits)
-                // We can't join without blocking, so we just move on
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-
-        // Clear writer and master - handle poisoned mutex gracefully
-        match pty_writer.lock() {
-            Ok(mut guard) => *guard = None,
-            Err(poisoned) => *poisoned.into_inner() = None,
-        }
-        match pty_master.lock() {
-            Ok(mut guard) => *guard = None,
-            Err(poisoned) => *poisoned.into_inner() = None,
-        }
+        // Ensure child is cleaned up
+        let exit_status = child.wait().await;
+        debug!(name = %agent_name, status = ?exit_status, "PTY process exited");
 
         Ok(())
     }
@@ -631,46 +569,35 @@ impl RalphLoop {
         }
 
         self.paused.store(false, Ordering::SeqCst);
-        // Reset activity timer so we don't immediately trigger idle timeout
-        // (ignore poisoning - idle timeout check will handle it)
-        if let Ok(mut guard) = self.last_activity.lock() {
-            *guard = Instant::now();
-        }
-
         Ok(())
     }
 
     pub async fn stop(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.running.store(false, Ordering::SeqCst);
+        // Signal cancellation - this immediately unblocks the select! in the task
+        self.cancel_token.cancel();
         self.paused.store(false, Ordering::SeqCst);
 
-        // Clear writer and master to unblock any writes
-        // (ignore poisoning - we're shutting down anyway)
-        if let Ok(mut guard) = self.pty_writer.lock() {
-            *guard = None;
-        }
-        if let Ok(mut guard) = self.pty_master.lock() {
-            *guard = None;
-        }
+        // Drop the command channel to signal the task
+        self.cmd_tx = None;
 
-        // Wait for reader thread to exit
-        // The thread checks `running` every 100ms and kills the child process when it sees false
-        // We use a timeout to avoid blocking forever if something goes wrong
-        if let Some(handle) = self.reader_handle.take() {
-            let join_start = std::time::Instant::now();
-            loop {
-                if handle.is_finished() {
-                    let _ = handle.join();
-                    break;
+        // Wait for the task to complete (with timeout for safety)
+        if let Some(handle) = self.task_handle.take() {
+            match tokio::time::timeout(Duration::from_secs(5), handle).await {
+                Ok(result) => {
+                    if let Err(e) = result {
+                        // Task panicked - log but don't propagate
+                        error!(error = ?e, "loop task panicked");
+                    }
                 }
-                if join_start.elapsed() >= Duration::from_secs(3) {
-                    // Timeout - thread will be cleaned up when it eventually exits
-                    break;
+                Err(_) => {
+                    // Timeout - task didn't exit in time
+                    // This shouldn't happen with proper cancellation, but handle it gracefully
+                    warn!("loop task did not exit within timeout");
                 }
-                tokio::time::sleep(Duration::from_millis(50)).await;
             }
         }
 
+        self.running.store(false, Ordering::SeqCst);
         Ok(())
     }
 }

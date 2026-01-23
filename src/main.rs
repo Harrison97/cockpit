@@ -20,6 +20,7 @@ use crossterm::{
     ExecutableCommand,
 };
 use ratatui::prelude::*;
+use tracing::info;
 
 static TERMINAL_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
@@ -36,8 +37,59 @@ fn cleanup_terminal() {
 /// Shared flag to signal shutdown from signal handler
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+fn init_tracing() {
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::{fmt, EnvFilter};
+
+    // Enable tokio-console if TOKIO_CONSOLE=1 is set
+    if std::env::var("TOKIO_CONSOLE").is_ok_and(|v| v == "1") {
+        // tokio-console subscriber for async task inspection
+        // Connect with: tokio-console http://127.0.0.1:6669
+        console_subscriber::init();
+        return;
+    }
+
+    // Set up file logging to .cockpit/logs/
+    // Log level controlled by COCKPIT_LOG env var (default: info)
+    let logs_dir = persistence::get_logs_dir();
+    if std::fs::create_dir_all(&logs_dir).is_err() {
+        return; // Can't create logs dir, skip logging
+    }
+
+    // Create timestamped log file
+    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+    let log_filename = format!("cockpit-{}.log", timestamp);
+
+    let log_file = match std::fs::File::create(logs_dir.join(&log_filename)) {
+        Ok(f) => f,
+        Err(_) => return, // Can't create log file, skip logging
+    };
+
+    let filter = EnvFilter::try_from_env("COCKPIT_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let file_layer = fmt::layer()
+        .with_writer(log_file)
+        .with_ansi(false)
+        .with_target(true)
+        .with_thread_ids(false)
+        .with_file(true)
+        .with_line_number(true);
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(file_layer)
+        .init();
+}
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    // Initialize tracing - logs to .cockpit/logs/ by default
+    // Use COCKPIT_LOG=debug for verbose logging
+    // Use TOKIO_CONSOLE=1 for async task inspection
+    init_tracing();
+
+    info!(version = env!("CARGO_PKG_VERSION"), "cockpit starting");
+
     // Set up panic hook to cleanup terminal on panic
     let default_hook = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
@@ -78,6 +130,8 @@ async fn main() -> io::Result<()> {
 
     // Run the main loop
     let result = run(&mut terminal);
+
+    info!("cockpit shutting down");
 
     // Cleanup terminal
     cleanup_terminal();

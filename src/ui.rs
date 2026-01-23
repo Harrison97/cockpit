@@ -21,6 +21,7 @@ pub struct SearchState {
     pub matches: Vec<(usize, usize)>,
     pub current: usize,
     pub query_len: usize,
+    pub total_matches: usize,
 }
 
 fn create_main_layout(area: Rect) -> (Rect, Rect, Rect) {
@@ -92,6 +93,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         matches: app.search_matches.clone(),
         current: app.search_current,
         query_len: app.search_query().map(|q| q.len()).unwrap_or(0),
+        total_matches: app.search_matches_absolute_count(),
     };
     render_terminal_pane(
         frame,
@@ -360,11 +362,11 @@ fn render_terminal_pane(
             };
 
             let focus_hint = if is_searching {
-                if !search.matches.is_empty() {
+                if search.total_matches > 0 {
                     format!(
                         " [SEARCH: Match {}/{}]",
                         search.current + 1,
-                        search.matches.len()
+                        search.total_matches
                     )
                 } else if search.query_len > 0 {
                     " [SEARCH: No matches]".to_string()
@@ -463,17 +465,8 @@ fn render_terminal_pane(
         term.set_scrollback(usize::MAX);
         let scrollback_max = term.screen().scrollback();
 
-        // vt100 limitation: visible_rows() panics if scrollback_offset > terminal_height.
-        // We validate scroll_offset here before rendering.
-        // The user's scroll_offset can go up to scrollback_max, but for rendering
-        // we must clamp to what vt100 can handle (terminal_height).
-        let render_max = terminal_height.min(scrollback_max);
-        let render_offset = (scroll_offset as usize).min(render_max);
-
-        // Note: agent.scroll_offset is the logical scroll position (can be > terminal_height)
-        // render_offset is the clamped value safe for vt100 rendering
-
-        // Set the validated scrollback offset for rendering
+        // Set scrollback offset for rendering (clamped to max available)
+        let render_offset = (scroll_offset as usize).min(scrollback_max);
         term.set_scrollback(render_offset);
 
         let screen = term.screen();
@@ -525,7 +518,7 @@ fn render_terminal_pane(
             frame,
             search_area,
             &search.mode,
-            search.matches.len(),
+            search.total_matches,
             search.current,
         );
     }
