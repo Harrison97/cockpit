@@ -7,7 +7,7 @@
   - Keep existing synchronous crossterm event polling
   - Verify app still runs correctly
 
-- [ ] **1.2 Create loop_manager module**
+- [x] **1.2 Create loop_manager module**
   - Create `src/loop_manager.rs`
   - Add module declaration in main.rs
   - Define empty `RalphLoop` struct placeholder
