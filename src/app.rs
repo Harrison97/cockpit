@@ -540,16 +540,32 @@ impl App {
             return true;
         }
 
-        // When output is focused and agent is running or paused, forward keys to PTY
+        // When output is focused
         if self.output_focused {
-            if let Some(agent) = self.selected_agent() {
-                if agent.status == AgentStatus::Running || agent.status == AgentStatus::Paused {
-                    // TAB unfocuses the terminal
-                    if code == KeyCode::Tab {
-                        self.unfocus_output();
+            // TAB unfocuses the terminal
+            if code == KeyCode::Tab {
+                self.unfocus_output();
+                return true;
+            }
+
+            // Shift+Arrow for scrolling (works regardless of agent status)
+            if modifiers.contains(KeyModifiers::SHIFT) {
+                match code {
+                    KeyCode::Up => {
+                        self.scroll_terminal_up(5);
                         return true;
                     }
+                    KeyCode::Down => {
+                        self.scroll_terminal_down(5);
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
 
+            // Forward keys to PTY only if agent is running or paused
+            if let Some(agent) = self.selected_agent() {
+                if agent.status == AgentStatus::Running || agent.status == AgentStatus::Paused {
                     // Forward ALL keys to PTY (including Ctrl+C, Esc)
                     let bytes = key_to_bytes(code, modifiers);
                     if !bytes.is_empty() {
@@ -559,14 +575,13 @@ impl App {
                 }
             }
 
-            // If not running or unhandled, Tab or Esc unfocuses
-            match code {
-                KeyCode::Tab | KeyCode::Esc => {
-                    self.unfocus_output();
-                    true
-                }
-                _ => false,
+            // Esc also unfocuses
+            if code == KeyCode::Esc {
+                self.unfocus_output();
+                return true;
             }
+
+            false
         } else {
             // Agent list focused - Ctrl+C quits only when not focused on terminal
             if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
@@ -583,8 +598,12 @@ impl App {
                     self.show_help = true;
                     true
                 }
-                KeyCode::Enter | KeyCode::Tab => {
+                KeyCode::Char(' ') => {
                     self.toggle_focus();
+                    true
+                }
+                KeyCode::Tab => {
+                    self.select_next();
                     true
                 }
                 KeyCode::Char('j') | KeyCode::Down => {

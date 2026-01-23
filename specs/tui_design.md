@@ -98,7 +98,24 @@ Use Ratatui's Layout with constraints:
 - Styled with dim text (`Color::DarkGray`)
 - Content varies by state:
   - Agent list focused: "j/k: nav │ r: run │ s: stop │ p: pause │ n: new │ i: msg │ ?: help │ q: quit"
-  - Output focused: "Type to interact │ Tab: back │ Scroll: mouse wheel"
+  - Output focused: "Type to interact │ Tab: back │ Ctrl+F: search │ Scroll: mouse wheel"
+  - Search input: "Type to search │ Enter: confirm │ Esc: cancel"
+  - Search navigating: "n/N: next/prev │ j/k: scroll │ Ctrl+D/U: page │ g/G: top/bottom │ q: exit"
+
+### Search Mode UI
+When Ctrl+F is pressed:
+- Terminal pane title changes to "{name} [SEARCH: query]"
+- Search matches highlighted in yellow (`Color::Yellow` background)
+- Current match highlighted in cyan (`Color::Cyan` background)
+- Match counter shown: "Match 3/15"
+- Search input box at bottom of terminal area during input phase
+
+### Input Blocking Indicator
+When process is starting/restarting:
+- Title shows "{name} [Starting...]" in yellow
+- Input keystrokes are dropped (not buffered)
+- Once first output received, title returns to normal
+- Prevents input from bleeding into new Claude instances during ralph loop restarts
 
 ## Rendering Frequency
 - Target: 60 FPS (16ms per frame)

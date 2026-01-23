@@ -3,7 +3,7 @@
 
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use regex::Regex;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -160,6 +160,8 @@ pub struct RalphLoop {
     last_activity: Arc<Mutex<Instant>>,
     /// Writer to send input to Claude's PTY
     pty_writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
+    /// Master PTY handle for resizing
+    pty_master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
     reader_handle: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -174,6 +176,7 @@ impl RalphLoop {
             running: Arc::new(AtomicBool::new(false)),
             last_activity: Arc::new(Mutex::new(Instant::now())),
             pty_writer: Arc::new(Mutex::new(None)),
+            pty_master: Arc::new(Mutex::new(None)),
             reader_handle: None,
         }
     }
@@ -208,6 +211,23 @@ impl RalphLoop {
         Ok(())
     }
 
+    /// Resize the PTY to the given dimensions.
+    pub fn resize(&self, rows: u16, cols: u16) -> Result<(), LoopError> {
+        if let Ok(guard) = self.pty_master.lock() {
+            if let Some(ref master) = *guard {
+                master
+                    .resize(PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    })
+                    .map_err(|e| LoopError::PtyError(e.to_string()))?;
+            }
+        }
+        Ok(())
+    }
+
     /// Start the ralph loop with PTY and auto-restart on idle.
     /// Sends raw terminal data through the channel for full TUI rendering.
     /// For Claude instances (is_ralph_loop=false), runs a single session without auto-restart.
@@ -215,6 +235,7 @@ impl RalphLoop {
         &mut self,
         agent_name: String,
         tx: mpsc::Sender<TerminalData>,
+        initial_size: (u16, u16),
     ) -> Result<(), LoopError> {
         if self.is_running() {
             return Err(LoopError::AlreadyRunning);
@@ -254,6 +275,7 @@ impl RalphLoop {
         let project_path = self.project_path.clone();
         let working_dir = self.working_dir.clone();
         let pty_writer = self.pty_writer.clone();
+        let pty_master = self.pty_master.clone();
         let is_ralph_loop = self.is_ralph_loop;
 
         let handle = std::thread::spawn(move || {
@@ -267,7 +289,9 @@ impl RalphLoop {
                 agent_name,
                 tx,
                 pty_writer,
+                pty_master,
                 is_ralph_loop,
+                initial_size,
             );
         });
 
@@ -285,7 +309,9 @@ impl RalphLoop {
         agent_name: String,
         tx: mpsc::Sender<TerminalData>,
         pty_writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
+        pty_master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
         is_ralph_loop: bool,
+        initial_size: (u16, u16),
     ) {
         while running.load(Ordering::SeqCst) {
             // Wait until not paused before starting a new iteration
@@ -307,7 +333,9 @@ impl RalphLoop {
                 &paused,
                 &last_activity,
                 &pty_writer,
+                &pty_master,
                 is_ralph_loop,
+                initial_size,
             );
 
             if let Err(e) = result {
@@ -316,6 +344,9 @@ impl RalphLoop {
                     agent_name.clone(),
                     error_msg.into_bytes(),
                 ));
+                // Clear PTY resources on error to prevent leaks
+                *pty_writer.lock().unwrap() = None;
+                *pty_master.lock().unwrap() = None;
                 // For Claude instances, don't retry on error - just stop
                 if !is_ralph_loop {
                     running.store(false, Ordering::SeqCst);
@@ -354,13 +385,15 @@ impl RalphLoop {
         paused: &Arc<AtomicBool>,
         last_activity: &Arc<Mutex<Instant>>,
         pty_writer: &Arc<Mutex<Option<Box<dyn Write + Send>>>>,
+        pty_master: &Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
         is_ralph_loop: bool,
+        initial_size: (u16, u16),
     ) -> Result<(), LoopError> {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
-                rows: 40,
-                cols: 180,
+                rows: initial_size.0,
+                cols: initial_size.1,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -405,6 +438,9 @@ impl RalphLoop {
         // Store writer for input forwarding
         *pty_writer.lock().unwrap() = Some(writer);
 
+        // Store master for resizing
+        *pty_master.lock().unwrap() = Some(pair.master);
+
         // prompt_content was already validated but we pipe from file directly for ralph loops
         let _ = prompt_content;
 
@@ -430,10 +466,30 @@ impl RalphLoop {
             }
         });
 
+        // Helper to wait for child process to be reaped (prevents zombies)
+        fn wait_for_child_exit(child: &mut Box<dyn portable_pty::Child + Send + Sync>) {
+            // Wait up to 2 seconds for the child to exit
+            let wait_start = Instant::now();
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break, // Process reaped
+                    Ok(None) => {
+                        if wait_start.elapsed() > Duration::from_secs(2) {
+                            // Timeout - force kill
+                            let _ = child.kill();
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break, // Error, assume reaped
+                }
+            }
+        }
+
         // Main loop: check for data, child exit, idle timeout
         loop {
             if !running.load(Ordering::SeqCst) {
                 let _ = child.kill();
+                wait_for_child_exit(&mut child);
                 break;
             }
 
@@ -462,6 +518,7 @@ impl RalphLoop {
                             .into_bytes(),
                     ));
                     let _ = child.kill();
+                    wait_for_child_exit(&mut child);
                     break;
                 }
             }
@@ -482,12 +539,27 @@ impl RalphLoop {
             }
         }
 
-        // Stop reader thread
+        // Stop reader thread with timeout to avoid hanging indefinitely
         reader_running.store(false, Ordering::SeqCst);
-        let _ = reader_thread.join();
+        // Wait for reader thread with a timeout
+        // We check is_finished in a loop, then join once it's done
+        let join_start = Instant::now();
+        loop {
+            if reader_thread.is_finished() {
+                let _ = reader_thread.join();
+                break;
+            }
+            if join_start.elapsed() >= Duration::from_secs(2) {
+                // Timeout - abandon the thread (it will be cleaned up when it exits)
+                // We can't join without blocking, so we just move on
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
 
-        // Clear writer
+        // Clear writer and master
         *pty_writer.lock().unwrap() = None;
+        *pty_master.lock().unwrap() = None;
 
         Ok(())
     }
@@ -516,8 +588,9 @@ impl RalphLoop {
         self.running.store(false, Ordering::SeqCst);
         self.paused.store(false, Ordering::SeqCst);
 
-        // Clear writer to unblock any writes
+        // Clear writer and master to unblock any writes
         *self.pty_writer.lock().unwrap() = None;
+        *self.pty_master.lock().unwrap() = None;
 
         if let Some(pid) = self.pid.take() {
             let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);

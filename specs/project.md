@@ -2,12 +2,23 @@
 
 ## Overview
 
-A ralph project is a directory containing the files needed to run a ralph loop.
+A ralph project is a directory containing the files needed to run a ralph loop or claude instance.
 
-## Required Files
+## Agent Types
 
-- `PROMPT.md` - The prompt that Claude reads each iteration (required)
-- `IMPLEMENTATION_PLAN.md` - Task list that Claude works through (optional, created if missing)
+### Ralph Loop
+- Has `PROMPT.md` - runs in a loop, auto-restarts, can be paused
+- Full ralph wiggum workflow: read prompt, pick task, implement, commit, exit, repeat
+
+### Claude Instance
+- No `PROMPT.md` - runs once, no auto-restart, cannot be paused
+- Interactive claude session in the target directory
+- Created when user provides empty prompt during agent creation
+
+## Files
+
+- `PROMPT.md` - The prompt that Claude reads each iteration (optional - omit for Claude instance)
+- `IMPLEMENTATION_PLAN.md` - Task list that Claude works through (optional, created if missing for ralph loops)
 
 ## Optional Files
 
@@ -49,28 +60,41 @@ Open an existing ralph project:
 
 ### `is_ralph_project(path: &Path) -> bool`
 
-Quick check if a directory is a ralph project:
+Quick check if a directory is a ralph project (has PROMPT.md):
 
 ```rust
 path.join("PROMPT.md").exists()
 ```
 
-### `create(path: PathBuf, prompt_content: &str) -> Result<Self>`
+Note: Returns false for Claude instances (they don't have PROMPT.md).
+
+### `has_prompt(path: &Path) -> bool`
+
+Check if the project has a prompt file:
+
+```rust
+path.join("PROMPT.md").exists()
+```
+
+Use this to determine AgentType when loading from persistence.
+
+### `create(path: PathBuf, prompt_content: &str) -> Result<(Self, AgentType)>`
 
 Create a new ralph project:
 
 1. Create directory if it doesn't exist
-2. Write PROMPT.md with provided content
-3. Create empty IMPLEMENTATION_PLAN.md:
-   ```markdown
-   # Implementation Plan
+2. **If prompt_content is not empty:**
+   - Write PROMPT.md with provided content
+   - Create empty IMPLEMENTATION_PLAN.md
+   - Create specs/ directory
+   - Return `AgentType::RalphLoop`
+3. **If prompt_content is empty:**
+   - Do NOT create PROMPT.md
+   - Do NOT create IMPLEMENTATION_PLAN.md
+   - Return `AgentType::ClaudeInstance`
+4. Return (RalphProject, AgentType)
 
-   ## Tasks
-
-   - [ ] First task goes here
-   ```
-4. Create specs/ directory
-5. Return RalphProject
+Note: The returned AgentType should be used when creating the Agent struct.
 
 ### `append_instruction(&self, text: &str) -> Result<()>`
 
@@ -110,11 +134,16 @@ Read the current IMPLEMENTATION_PLAN.md content.
 
 When user presses `n` for new loop:
 
-1. Prompt: "Project path: " (text input)
-2. Prompt: "Prompt content (or 'default'): " (text input or file path)
-3. Create project with RalphProject::create()
-4. Add new Agent to app with this project
-5. Show confirmation: "Created loop: {name}"
+1. Prompt: "Target repo path: " (text input)
+2. Prompt: "Agent name: " (text input, defaults to repo name)
+3. Prompt: "Prompt (optional): " (text input)
+   - If empty: creates Claude instance
+   - If has content: creates Ralph loop
+4. Create project with RalphProject::create()
+5. Add new Agent to app with appropriate AgentType
+6. Show confirmation:
+   - Ralph loop: "Created loop: {name}"
+   - Claude instance: "Created instance: {name}"
 
 ## Default Prompt Template
 

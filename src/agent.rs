@@ -86,6 +86,62 @@ impl AgentStatus {
 pub const TERM_COLS: u16 = 180;
 pub const TERM_ROWS: u16 = 40;
 
+/// Filter out mouse escape sequences that may leak from PTY
+/// Handles multiple mouse protocols:
+/// - SGR: `\x1b[<Pb;Px;PyM` or `\x1b[<Pb;Px;Pym`
+/// - X10: `\x1b[M` + 3 raw bytes
+/// - urxvt: `\x1b[Pb;Px;PyM`
+fn filter_mouse_sequences(data: &[u8]) -> Vec<u8> {
+    let mut result = Vec::with_capacity(data.len());
+    let mut i = 0;
+    'outer: while i < data.len() {
+        // Check for escape sequence start
+        if data[i] == 0x1b && i + 1 < data.len() && data[i + 1] == b'[' {
+            // SGR mouse: ESC [ < ... M or ESC [ < ... m
+            if i + 2 < data.len() && data[i + 2] == b'<' {
+                let mut j = i + 3;
+                while j < data.len() && data[j] != b'M' && data[j] != b'm' {
+                    j += 1;
+                }
+                if j < data.len() {
+                    i = j + 1;
+                    continue 'outer;
+                }
+            }
+            // X10 mouse: ESC [ M followed by exactly 3 bytes
+            if i + 2 < data.len() && data[i + 2] == b'M' {
+                // Skip ESC [ M + 3 coordinate bytes
+                i = (i + 6).min(data.len());
+                continue 'outer;
+            }
+            // urxvt mouse: ESC [ digits ; digits ; digits M (uppercase M only!)
+            // Lowercase 'm' is used for ANSI color codes, so we must not filter those
+            if i + 2 < data.len() && data[i + 2].is_ascii_digit() {
+                let mut j = i + 2;
+                let mut semicolon_count = 0;
+                while j < data.len() {
+                    if data[j] == b';' {
+                        semicolon_count += 1;
+                    } else if data[j] == b'M' {
+                        // urxvt mouse has exactly 2 semicolons (button;x;y)
+                        if semicolon_count == 2 {
+                            i = j + 1;
+                            continue 'outer;
+                        }
+                        break;
+                    } else if !data[j].is_ascii_digit() {
+                        break;
+                    }
+                    j += 1;
+                }
+            }
+        }
+        result.push(data[i]);
+        i += 1;
+    }
+    result
+}
+
 /// Represents an AI agent being monitored by the console
 pub struct Agent {
     pub name: String,
@@ -103,6 +159,8 @@ pub struct Agent {
     pub agent_type: AgentType,
     /// Scroll offset for terminal pane (0 = bottom, positive = scrolled up)
     pub scroll_offset: u16,
+    /// Last known terminal size (rows, cols) for resize optimization
+    last_size: (u16, u16),
 }
 
 impl Agent {
@@ -115,6 +173,7 @@ impl Agent {
             iteration: 0,
             project_path: None,
             working_dir: None,
+            last_size: (TERM_ROWS, TERM_COLS),
             ralph_loop: None,
             agent_type: AgentType::default(),
             scroll_offset: 0,
@@ -138,6 +197,7 @@ impl Agent {
             ralph_loop: None,
             agent_type,
             scroll_offset: 0,
+            last_size: (TERM_ROWS, TERM_COLS),
         }
     }
 
@@ -150,21 +210,57 @@ impl Agent {
 
     /// Process raw terminal data from the PTY
     pub fn process_terminal_data(&mut self, data: &[u8]) {
+        // Filter out mouse escape sequences that may leak from PTY
+        let filtered = filter_mouse_sequences(data);
+
         if let Ok(mut term) = self.terminal.lock() {
-            term.process(data);
-        }
-        // Auto-scroll to bottom when new content arrives (if not scrolled up)
-        // Only reset if we're already at the bottom
-        if self.scroll_offset == 0 {
-            // Stay at bottom - no action needed
+            // If scrolled up, track how many new lines are added to maintain position
+            let old_scrollback_max = if self.scroll_offset > 0 {
+                // Get max scrollback by setting to max and reading clamped value
+                term.set_scrollback(usize::MAX);
+                let max = term.screen().scrollback();
+                term.set_scrollback(0);
+                Some(max)
+            } else {
+                None
+            };
+
+            term.process(&filtered);
+
+            // Adjust scroll_offset to maintain absolute position
+            if let Some(old_max) = old_scrollback_max {
+                // vt100 bug workaround: must clamp to terminal height
+                let terminal_height = self.last_size.0 as usize;
+
+                term.set_scrollback(usize::MAX);
+                let new_max = term.screen().scrollback();
+                term.set_scrollback(0);
+
+                let lines_added = new_max.saturating_sub(old_max);
+                let new_offset = self.scroll_offset.saturating_add(lines_added as u16);
+
+                // Clamp to safe max (min of scrollback size and terminal height - 1)
+                let safe_max = new_max.min(terminal_height.saturating_sub(1));
+                self.scroll_offset = new_offset.min(safe_max as u16);
+            }
         }
     }
 
     /// Scroll up by the given number of lines
     pub fn scroll_up(&mut self, lines: u16) {
-        if let Ok(term) = self.terminal.lock() {
-            let scrollback = term.screen().scrollback() as u16;
-            self.scroll_offset = (self.scroll_offset + lines).min(scrollback);
+        if let Ok(mut term) = self.terminal.lock() {
+            // vt100 bug workaround: must clamp to both scrollback size AND terminal height
+            let terminal_height = self.last_size.0 as usize;
+
+            // Get max scrollback by setting to max and reading clamped value
+            term.set_scrollback(usize::MAX);
+            let scrollback_max = term.screen().scrollback();
+
+            // Clamp to both (vt100 visible_rows panics if offset > rows.len())
+            let safe_max = scrollback_max.min(terminal_height.saturating_sub(1));
+            let new_offset = self.scroll_offset.saturating_add(lines).min(safe_max as u16);
+            term.set_scrollback(new_offset as usize);
+            self.scroll_offset = new_offset;
         }
     }
 
@@ -175,6 +271,35 @@ impl Agent {
 
     /// Reset scroll to bottom (follow output)
     pub fn scroll_to_bottom(&mut self) {
+        self.scroll_offset = 0;
+    }
+
+    /// Resize the terminal to the given dimensions (only if size changed)
+    pub fn resize(&mut self, rows: u16, cols: u16) {
+        if self.last_size == (rows, cols) {
+            return;
+        }
+        self.last_size = (rows, cols);
+
+        // Reset scroll before resize to avoid stale offset issues
+        self.scroll_offset = 0;
+
+        // Resize the vt100 parser
+        if let Ok(mut term) = self.terminal.lock() {
+            term.set_scrollback(0);
+            term.set_size(rows, cols);
+        }
+
+        // Resize the PTY
+        if let Some(ref ralph_loop) = self.ralph_loop {
+            let _ = ralph_loop.resize(rows, cols);
+        }
+    }
+
+    /// Reset the terminal parser to a fresh state with the current size
+    pub fn reset_terminal(&mut self) {
+        let (rows, cols) = self.last_size;
+        self.terminal = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 1000)));
         self.scroll_offset = 0;
     }
 
@@ -193,6 +318,9 @@ impl Agent {
             return Ok(());
         }
 
+        // Reset terminal to fresh state with current size
+        self.reset_terminal();
+
         if let Some(ref project_path) = self.project_path {
             let working_dir = self
                 .working_dir
@@ -203,7 +331,7 @@ impl Agent {
 
             let mut last_error = None;
             for attempt in 0..Self::MAX_SPAWN_RETRIES {
-                match ralph_loop.start(self.name.clone(), tx.clone()) {
+                match ralph_loop.start(self.name.clone(), tx.clone(), self.last_size) {
                     Ok(()) => {
                         self.ralph_loop = Some(ralph_loop);
                         self.status = AgentStatus::Running;

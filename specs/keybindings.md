@@ -36,7 +36,36 @@ Note: Claude instances (agents without PROMPT.md) cannot be paused.
 |-----|--------|-------------|
 | `Enter`/`Tab` | Toggle focus | Switch focus to output pane for interaction |
 | `Tab` | Unfocus | Return focus to agent list (when focused) |
+| `Space` | Focus | Alternative way to focus output pane |
 | Mouse wheel | Scroll | Scroll through terminal history (when focused) |
+| `Ctrl+F` | Search | Enter search mode (vim-style navigation) |
+
+## Search Mode (Ctrl+F)
+
+When in search mode, the terminal pane becomes a read-only view with vim-style navigation.
+
+### Entering Search
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Ctrl+F` | Start search | Enter search mode with query input |
+| Type | Update query | Incremental search as you type |
+| `Enter` | Confirm | Switch to navigation mode with current matches |
+| `Esc` | Cancel | Exit search mode, return to focused mode |
+
+### Navigation Mode (after search confirmed)
+| Key | Action | Description |
+|-----|--------|-------------|
+| `n` | Next match | Jump to next search match |
+| `N` | Prev match | Jump to previous search match |
+| `j` / `Down` | Scroll down | Scroll down one line |
+| `k` / `Up` | Scroll up | Scroll up one line |
+| `Ctrl+D` | Half page down | Scroll down half a page |
+| `Ctrl+U` | Half page up | Scroll up half a page |
+| `g` | Go to top | Scroll to beginning of history |
+| `G` | Go to bottom | Scroll to end (live output) |
+| `q` / `Esc` | Exit | Exit search mode, return to focused mode |
+
+Note: While in search mode, no input is sent to the subprocess. This is a read-only view mode.
 
 ## Application
 

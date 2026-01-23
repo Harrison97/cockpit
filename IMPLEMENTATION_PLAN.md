@@ -230,17 +230,87 @@
   - Ensure selected agent is always visible in the viewport
   - Show scroll indicators (▲/▼) when more items above/below
 
-## Phase 11: Full Terminal Takeover
+## Phase 11: Search Mode (Ctrl+F)
 
-- [ ] **11.1 Verify alternate screen usage**
-  - Confirm `EnterAlternateScreen` is used in main.rs (already done)
-  - Ensure no stdout writes outside of ratatui rendering
-  - Test that scrollback is isolated from cockpit UI
+- [ ] **11.1 Add SearchMode state to App**
+  - Add `SearchMode` enum: `Off`, `Searching(String)`, `Navigating`
+  - Add `search_mode: SearchMode` field to App
+  - Add `search_matches: Vec<(usize, usize)>` for match positions (line, col)
+  - Add `search_current: usize` for current match index
 
-- [ ] **11.2 Disable terminal scrollback during run**
-  - The alternate screen should already isolate scrollback
-  - If needed, add explicit terminal mode settings
-  - Test with various terminal emulators (iTerm, Terminal.app, kitty)
+- [ ] **11.2 Implement Ctrl+F to enter search mode**
+  - When output_focused, Ctrl+F enters `SearchMode::Searching("")`
+  - Show search input box at bottom of terminal pane
+  - Type to update search query in real-time
+  - Enter confirms and switches to `Navigating` mode
+  - Esc cancels and returns to normal focused mode
+
+- [ ] **11.3 Implement search highlighting**
+  - Search through terminal scrollback buffer for matches
+  - Highlight matches in terminal render (yellow background)
+  - Current match gets distinct highlight (cyan background)
+  - Update matches as user types (incremental search)
+
+- [ ] **11.4 Add vim-style navigation in search mode**
+  - `n` = next match (scroll to show it)
+  - `N` (Shift+n) = previous match
+  - `j`/`k` or arrows = scroll manually line by line
+  - `Ctrl+d`/`Ctrl+u` = half-page scroll
+  - `g`/`G` = top/bottom of history
+  - `q` or `Esc` = exit search mode, return to focused mode
+
+- [ ] **11.5 Update footer hints for search mode**
+  - Searching: "Type to search │ Enter: confirm │ Esc: cancel"
+  - Navigating: "n/N: next/prev match │ j/k: scroll │ q: exit search"
+
+## Phase 12: Block Input During Restarts
+
+- [ ] **12.1 Track process readiness state**
+  - Add `ProcessState` enum: `Starting`, `Ready`, `Stopping`, `Stopped`
+  - Add `process_state: ProcessState` to Agent
+  - Set to `Starting` when subprocess spawns
+  - Set to `Ready` when first output received (or short delay)
+  - Set to `Stopping` during stop/restart transitions
+
+- [ ] **12.2 Buffer or block input during transitions**
+  - In `Agent::send_input()`, check `process_state`
+  - If `Starting` or `Stopping`, drop input silently (or buffer)
+  - Only forward input when `Ready`
+  - Show visual indicator when input blocked: "[Starting...]" in title
+
+- [ ] **12.3 Handle restart transitions for RalphLoop**
+  - Detect loop restart (Claude exits, bash restarts)
+  - Set state to `Starting` during transition
+  - Set state to `Ready` when new Claude prompt appears
+  - This prevents keystrokes from bleeding into next Claude instance
+
+## Phase 13: Unlimited Scrollback History
+
+- [ ] **13.1 Increase vt100 scrollback buffer**
+  - Change from 1000 to 100000 lines in vt100::Parser::new()
+  - Test memory usage with large buffers
+  - This gives us ~100K lines in-memory
+
+- [ ] **13.2 Remove artificial scroll limits**
+  - Remove the `terminal_height - 1` clamp (vt100 bug workaround)
+  - Fix the root cause: validate scrollback before each render
+  - Allow scrolling through entire scrollback buffer
+
+- [ ] **13.3 Create disk-backed history storage**
+  - Create `~/.cockpit/agents/{name}/history.log` file
+  - Append all terminal output to this file (raw bytes)
+  - On startup, load recent history into vt100 buffer
+  - Keep file for persistence across restarts
+
+- [ ] **13.4 Implement history file rotation (optional)**
+  - If history file exceeds 10MB, rotate to `.1`, `.2`, etc.
+  - Keep last 3 rotated files (30MB total max)
+  - Or use a single ring buffer file
+
+- [ ] **13.5 Add scroll position indicator**
+  - Show "Line X / Y" in title when scrolled
+  - Update indicator as user scrolls
+  - Show "[LIVE]" when at bottom (scroll_offset = 0)
 
 ## Completion Criteria
 
@@ -253,3 +323,6 @@ All items checked. Application:
 - Persists state across restarts
 - Supports Claude instances (no prompt, no loop)
 - Scrollable agent list and terminal pane
+- Ctrl+F search with vim-style navigation
+- Input blocked during process transitions
+- Unlimited scrollback with disk persistence

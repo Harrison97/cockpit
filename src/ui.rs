@@ -56,6 +56,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Ensure selected agent is visible before rendering
     app.ensure_selected_visible(agent_list_inner.height as usize);
 
+    // Calculate terminal pane inner area for resizing
+    let terminal_inner = {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded);
+        block.inner(output_pane_area)
+    };
+
+    // Resize selected agent's terminal to match display area
+    if let Some(agent) = app.selected_agent_mut() {
+        agent.resize(terminal_inner.height, terminal_inner.width);
+    }
+
     render_header(frame, header_area);
     render_agent_list(
         frame,
@@ -64,11 +77,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         app.selected_index,
         app.list_scroll_offset,
     );
+    // Read output_focused before borrowing app mutably
+    let output_focused = app.output_focused;
     render_terminal_pane(
         frame,
         output_pane_area,
-        app.selected_agent(),
-        app.output_focused,
+        app.selected_agent_mut(),
+        output_focused,
     );
     render_footer(frame, footer_area, app);
 
@@ -300,19 +315,37 @@ fn render_agent_list(
 fn render_terminal_pane(
     frame: &mut Frame,
     area: Rect,
-    agent: Option<&Agent>,
+    agent: Option<&mut Agent>,
     output_focused: bool,
 ) {
-    let (title, scroll_offset) = match agent {
+    // Build title - need to access terminal to get scrollback info
+    let (title, scroll_offset) = match agent.as_ref() {
         Some(a) => {
+            // Get max scrollback size by setting to max and reading clamped value
+            let scrollback_size = a
+                .terminal
+                .lock()
+                .ok()
+                .map(|mut t| {
+                    t.set_scrollback(usize::MAX);
+                    let max = t.screen().scrollback();
+                    t.set_scrollback(0);
+                    max
+                })
+                .unwrap_or(0);
             let focus_hint = if output_focused {
                 if a.scroll_offset > 0 {
-                    format!(" [SCROLLED +{} - Tab to exit]", a.scroll_offset)
+                    format!(
+                        " [SCROLLED +{}/{} - Tab to exit]",
+                        a.scroll_offset, scrollback_size
+                    )
+                } else if scrollback_size > 0 {
+                    format!(" [FOCUSED - {} lines history - Tab to exit]", scrollback_size)
                 } else {
                     " [FOCUSED - Tab to exit]".to_string()
                 }
             } else {
-                " [Tab/Enter to focus]".to_string()
+                " [Space to focus]".to_string()
             };
             (format!("{}{}", a.name, focus_hint), a.scroll_offset)
         }
@@ -357,9 +390,26 @@ fn render_terminal_pane(
 
     // Get the terminal screen from the agent, applying scroll offset
     if let Ok(mut term) = agent.terminal.lock() {
-        // Set the scrollback position before getting the screen
-        // scroll_offset: 0 = bottom (current), positive = scrolled up into history
-        term.set_scrollback(scroll_offset as usize);
+        // vt100 bug workaround: set_scrollback clamps to scrollback.len(), but
+        // visible_rows() panics if scrollback_offset > rows.len() (terminal height).
+        // We must clamp to BOTH the scrollback size AND the terminal height.
+        let terminal_height = inner_area.height as usize;
+
+        // Get max scrollback by setting to max and reading clamped value
+        term.set_scrollback(usize::MAX);
+        let scrollback_max = term.screen().scrollback();
+
+        // Clamp to both scrollback size and terminal height (vt100 bug workaround)
+        let safe_max = scrollback_max.min(terminal_height.saturating_sub(1));
+        let safe_offset = (scroll_offset as usize).min(safe_max);
+
+        if safe_offset != scroll_offset as usize {
+            agent.scroll_offset = safe_offset as u16;
+        }
+
+        // Now set the validated scrollback offset
+        term.set_scrollback(safe_offset);
+
         let screen = term.screen();
         let pseudo_term = PseudoTerminal::new(screen);
         frame.render_widget(pseudo_term, inner_area);
@@ -414,7 +464,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
             })
             .unwrap_or_default();
         format!(
-            "Type to interact │ Tab: back │ Scroll: mouse wheel │ Ctrl+C: interrupt{}",
+            "Type to interact │ Tab: back │ Scroll: Shift+↑/↓ │ Ctrl+C: interrupt{}",
             scroll_hint
         )
     } else {
@@ -422,9 +472,9 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         let can_pause = app.selected_agent().map(|a| a.can_pause()).unwrap_or(true);
 
         if can_pause {
-            "j/k: nav │ Tab: focus │ r: run │ s: stop │ p: pause │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
+            "j/k: nav │ Space: focus │ r: run │ s: stop │ p: pause │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
         } else {
-            "j/k: nav │ Tab: focus │ r: run │ s: stop │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
+            "j/k: nav │ Space: focus │ r: run │ s: stop │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
         }
     };
 
@@ -663,8 +713,8 @@ fn render_help_screen(frame: &mut Frame) {
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from("  j/k, ↑/↓    Navigate agents"),
-        Line::from("  Tab/Enter   Focus terminal (type to interact)"),
-        Line::from("  Tab         Unfocus terminal"),
+        Line::from("  Tab         Next agent / Unfocus terminal"),
+        Line::from("  Space       Focus terminal (type to interact)"),
         Line::from("  Mouse wheel Scroll terminal (when focused)"),
         Line::from(""),
         Line::from(Span::styled(
