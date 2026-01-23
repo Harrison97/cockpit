@@ -58,9 +58,10 @@ fn create_content_layout(area: Rect) -> (Rect, Rect) {
 ///
 /// Shows each agent with:
 /// - Line 1: Arrow (if selected) + name
-/// - Line 2: Status dot + status text
+/// - Line 2: Status dot + status text + PID (if running)
 /// - Line 3: Uptime
 /// - Line 4: Loop count (only for running/paused agents)
+/// - Line 5: Project path (truncated, only for agents with projects)
 /// - Blank line between agents
 fn render_agent_list(frame: &mut Frame, area: Rect, agents: &[Agent], selected_index: usize) {
     let block = Block::default()
@@ -116,7 +117,7 @@ fn render_agent_list(frame: &mut Frame, area: Rect, agents: &[Agent], selected_i
             ]));
         }
 
-        // Line 2: Status dot + status text
+        // Line 2: Status dot + status text + PID (if running)
         let status_dot = match agent.status {
             crate::agent::AgentStatus::Stopped => "○",
             _ => "●",
@@ -133,7 +134,12 @@ fn render_agent_list(frame: &mut Frame, area: Rect, agents: &[Agent], selected_i
             Style::default().fg(status_color)
         };
 
-        let status_line_content = format!("  {} {}", status_dot, agent.status);
+        // Include PID if the agent has a running subprocess
+        let pid_suffix = agent
+            .pid()
+            .map(|pid| format!(" [{}]", pid))
+            .unwrap_or_default();
+        let status_line_content = format!("  {} {}{}", status_dot, agent.status, pid_suffix);
         if is_selected {
             let padded_status = format!(
                 "{:width$}",
@@ -145,7 +151,10 @@ fn render_agent_list(frame: &mut Frame, area: Rect, agents: &[Agent], selected_i
             lines.push(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(status_dot, status_style),
-                Span::styled(format!(" {}", agent.status), status_text_style),
+                Span::styled(
+                    format!(" {}{}", agent.status, pid_suffix),
+                    status_text_style,
+                ),
             ]));
         }
 
@@ -178,6 +187,32 @@ fn render_agent_list(frame: &mut Frame, area: Rect, agents: &[Agent], selected_i
                 lines.push(Line::from(Span::styled(padded_loop, loop_style)));
             } else {
                 lines.push(Line::from(Span::styled(loop_text, loop_style)));
+            }
+        }
+
+        // Line 5: Project path (truncated to fit, only for agents with projects)
+        if let Some(ref project_path) = agent.project_path {
+            // Truncate path to fit in the available width, minus the "  " prefix
+            let max_path_len = (inner_area.width as usize).saturating_sub(2);
+            let path_str = project_path.to_string_lossy();
+            let truncated_path = if path_str.len() > max_path_len {
+                // Show the end of the path (most relevant part)
+                format!("…{}", &path_str[path_str.len() - max_path_len + 1..])
+            } else {
+                path_str.to_string()
+            };
+            let path_text = format!("  {}", truncated_path);
+            let path_style = if is_selected {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            if is_selected {
+                let padded_path =
+                    format!("{:width$}", path_text, width = inner_area.width as usize);
+                lines.push(Line::from(Span::styled(padded_path, path_style)));
+            } else {
+                lines.push(Line::from(Span::styled(path_text, path_style)));
             }
         }
 
@@ -346,6 +381,95 @@ fn render_header(frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
+/// Renders the help screen overlay
+///
+/// Shows all keybindings in a centered popup.
+fn render_help(frame: &mut Frame, area: Rect) {
+    use ratatui::widgets::Clear;
+
+    // Calculate centered area for help popup
+    let popup_width = 50.min(area.width.saturating_sub(4));
+    let popup_height = 20.min(area.height.saturating_sub(4));
+    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    // Clear the area behind the popup
+    frame.render_widget(Clear, popup_area);
+
+    // Help content
+    let help_lines = vec![
+        Line::from(Span::styled(
+            "Keybindings",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Navigation",
+            Style::default().fg(Color::Yellow),
+        )),
+        Line::from("  j/↓     Move down"),
+        Line::from("  k/↑     Move up"),
+        Line::from("  g       Go to first"),
+        Line::from("  G       Go to last"),
+        Line::from("  Enter   Toggle output focus"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Agent Control",
+            Style::default().fg(Color::Yellow),
+        )),
+        Line::from("  S       Start selected"),
+        Line::from("  s       Stop selected"),
+        Line::from("  p       Pause selected"),
+        Line::from("  r       Resume selected"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Loop Management",
+            Style::default().fg(Color::Yellow),
+        )),
+        Line::from("  n       New loop"),
+        Line::from("  i       Send instruction"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Output (when focused)",
+            Style::default().fg(Color::Yellow),
+        )),
+        Line::from("  j/k     Scroll up/down"),
+        Line::from("  Ctrl+u  Page up"),
+        Line::from("  Ctrl+d  Page down"),
+        Line::from("  Esc     Return to list"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Application",
+            Style::default().fg(Color::Yellow),
+        )),
+        Line::from("  ?       Show this help"),
+        Line::from("  q       Quit"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Press any key to close",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let block = Block::default()
+        .title(Span::styled(
+            "Help",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let paragraph = Paragraph::new(help_lines).block(block);
+    frame.render_widget(paragraph, popup_area);
+}
+
 /// Renders the footer with keybinding hints or input prompt
 ///
 /// Shows different content based on input mode and focus state:
@@ -359,9 +483,10 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
             let content = if let Some(ref msg) = app.status_message {
                 format!(" {}", msg)
             } else if app.output_focused {
-                " j/k: scroll  Esc: back  Ctrl+d/u: page  q: quit".to_string()
+                " j/k: scroll  Esc: back  Ctrl+d/u: page  ?: help  q: quit".to_string()
             } else {
-                " j/k: navigate  n: new  i: instruct  p: pause  r: resume  q: quit".to_string()
+                " j/k: navigate  n: new  i: instruct  p: pause  r: resume  ?: help  q: quit"
+                    .to_string()
             };
 
             let style = if app.status_message.is_some() {
@@ -432,4 +557,9 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     // Render footer with keybinding hints or input prompt
     render_footer(frame, footer_area, app);
+
+    // Render help overlay if showing
+    if app.show_help {
+        render_help(frame, area);
+    }
 }

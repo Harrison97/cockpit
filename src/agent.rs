@@ -260,6 +260,11 @@ impl Agent {
     pub fn is_subprocess_running(&self) -> bool {
         self.ralph_loop.as_ref().is_some_and(|rl| rl.is_running())
     }
+
+    /// Returns the PID of the subprocess if running
+    pub fn pid(&self) -> Option<u32> {
+        self.ralph_loop.as_ref().and_then(|rl| rl.pid())
+    }
 }
 
 /// Creates demo agents for demonstration purposes

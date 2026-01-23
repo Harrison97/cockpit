@@ -173,7 +173,7 @@
   - Clean up zombie processes
   - Save state before exit
 
-- [ ] **8.3 UI enhancements**
+- [x] **8.3 UI enhancements**
   - Show PID in agent info
   - Add help screen with `?`
   - Show loop project path

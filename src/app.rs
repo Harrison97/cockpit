@@ -64,6 +64,8 @@ pub struct App {
     pub status_message: Option<String>,
     /// Detector for iteration boundaries in output
     iteration_detector: IterationDetector,
+    /// Whether the help screen is being shown
+    pub show_help: bool,
 }
 
 impl App {
@@ -91,6 +93,7 @@ impl App {
             pending_project_path: None,
             status_message: None,
             iteration_detector: IterationDetector::new(),
+            show_help: false,
         }
     }
 
@@ -556,6 +559,12 @@ impl App {
             return self.handle_input_key(code, modifiers);
         }
 
+        // If help screen is showing, any key dismisses it
+        if self.show_help {
+            self.show_help = false;
+            return true;
+        }
+
         // Global keybindings (work regardless of focus state)
         match code {
             KeyCode::Char('q') => {
@@ -564,6 +573,10 @@ impl App {
             }
             KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
                 self.running = false;
+                return true;
+            }
+            KeyCode::Char('?') => {
+                self.show_help = true;
                 return true;
             }
             KeyCode::Enter => {

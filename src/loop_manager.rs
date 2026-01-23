@@ -281,6 +281,11 @@ impl RalphLoop {
         self.child.is_some()
     }
 
+    /// Returns the PID of the subprocess if running.
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
+    }
+
     /// Start the ralph loop subprocess.
     ///
     /// Spawns bash with the ralph loop command and configures stdout capture.
