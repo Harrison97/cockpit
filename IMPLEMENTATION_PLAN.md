@@ -2,7 +2,7 @@
 
 ## Phase 1: Async Foundation
 
-- [ ] **1.1 Add tokio runtime to main**
+- [x] **1.1 Add tokio runtime to main**
   - Wrap main function in `#[tokio::main]`
   - Keep existing synchronous crossterm event polling
   - Verify app still runs correctly

@@ -12,7 +12,8 @@ use crossterm::{
 };
 use ratatui::prelude::*;
 
-fn main() -> io::Result<()> {
+#[tokio::main]
+async fn main() -> io::Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     io::stdout().execute(EnterAlternateScreen)?;
