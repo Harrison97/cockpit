@@ -238,7 +238,7 @@
   - Add `search_matches: Vec<(usize, usize)>` for match positions (line, col)
   - Add `search_current: usize` for current match index
 
-- [ ] **11.2 Implement Ctrl+F to enter search mode**
+- [x] **11.2 Implement Ctrl+F to enter search mode**
   - When output_focused, Ctrl+F enters `SearchMode::Searching("")`
   - Show search input box at bottom of terminal pane
   - Type to update search query in real-time

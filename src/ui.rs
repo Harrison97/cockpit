@@ -13,7 +13,7 @@ use ratatui::{
 use tui_term::widget::PseudoTerminal;
 
 use crate::agent::{Agent, AgentStatus, AgentType};
-use crate::app::{App, InputMode, LINES_PER_AGENT};
+use crate::app::{App, InputMode, SearchMode, LINES_PER_AGENT};
 
 fn create_main_layout(area: Rect) -> (Rect, Rect, Rect) {
     let chunks = Layout::default()
@@ -77,13 +77,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         app.selected_index,
         app.list_scroll_offset,
     );
-    // Read output_focused before borrowing app mutably
+    // Read output_focused and search_mode before borrowing app mutably
     let output_focused = app.output_focused;
+    let search_mode = app.search_mode.clone();
     render_terminal_pane(
         frame,
         output_pane_area,
         app.selected_agent_mut(),
         output_focused,
+        &search_mode,
     );
     render_footer(frame, footer_area, app);
 
@@ -317,7 +319,10 @@ fn render_terminal_pane(
     area: Rect,
     agent: Option<&mut Agent>,
     output_focused: bool,
+    search_mode: &SearchMode,
 ) {
+    let is_searching = !matches!(search_mode, SearchMode::Off);
+
     // Build title - need to access terminal to get scrollback info
     let (title, scroll_offset) = match agent.as_ref() {
         Some(a) => {
@@ -333,7 +338,9 @@ fn render_terminal_pane(
                     max
                 })
                 .unwrap_or(0);
-            let focus_hint = if output_focused {
+            let focus_hint = if is_searching {
+                " [SEARCH MODE]".to_string()
+            } else if output_focused {
                 if a.scroll_offset > 0 {
                     format!(
                         " [SCROLLED +{}/{} - Tab to exit]",
@@ -355,13 +362,17 @@ fn render_terminal_pane(
         None => ("Terminal (none)".to_string(), 0),
     };
 
-    let border_color = if output_focused {
+    let border_color = if is_searching {
+        Color::Yellow
+    } else if output_focused {
         Color::Cyan
     } else {
         Color::DarkGray
     };
 
-    let title_color = if output_focused {
+    let title_color = if is_searching {
+        Color::Yellow
+    } else if output_focused {
         Color::Cyan
     } else {
         Color::White
@@ -391,12 +402,33 @@ fn render_terminal_pane(
         }
     };
 
+    // If in search mode, reserve space for search box at bottom
+    let (terminal_area, search_area) = if is_searching {
+        let terminal_height = inner_area.height.saturating_sub(1);
+        (
+            Rect {
+                x: inner_area.x,
+                y: inner_area.y,
+                width: inner_area.width,
+                height: terminal_height,
+            },
+            Some(Rect {
+                x: inner_area.x,
+                y: inner_area.y + terminal_height,
+                width: inner_area.width,
+                height: 1,
+            }),
+        )
+    } else {
+        (inner_area, None)
+    };
+
     // Get the terminal screen from the agent, applying scroll offset
     if let Ok(mut term) = agent.terminal.lock() {
         // vt100 bug workaround: set_scrollback clamps to scrollback.len(), but
         // visible_rows() panics if scrollback_offset > rows.len() (terminal height).
         // We must clamp to BOTH the scrollback size AND the terminal height.
-        let terminal_height = inner_area.height as usize;
+        let terminal_height = terminal_area.height as usize;
 
         // Get max scrollback by setting to max and reading clamped value
         term.set_scrollback(usize::MAX);
@@ -415,11 +447,50 @@ fn render_terminal_pane(
 
         let screen = term.screen();
         let pseudo_term = PseudoTerminal::new(screen);
-        frame.render_widget(pseudo_term, inner_area);
+        frame.render_widget(pseudo_term, terminal_area);
     } else {
         let msg = Paragraph::new("Terminal unavailable").style(Style::default().fg(Color::Red));
-        frame.render_widget(msg, inner_area);
+        frame.render_widget(msg, terminal_area);
     }
+
+    // Render search box if in search mode
+    if let Some(search_area) = search_area {
+        render_search_box(frame, search_area, search_mode);
+    }
+}
+
+/// Renders the search input box at the bottom of the terminal pane
+fn render_search_box(frame: &mut Frame, area: Rect, search_mode: &SearchMode) {
+    let (query, is_navigating) = match search_mode {
+        SearchMode::Searching(q) => (q.as_str(), false),
+        SearchMode::Navigating(q) => (q.as_str(), true),
+        SearchMode::Off => return,
+    };
+
+    let prefix = if is_navigating { "/" } else { "Search: " };
+    let cursor = if is_navigating { "" } else { "_" };
+
+    let available_width = area.width as usize;
+    let prefix_len = prefix.chars().count();
+    let cursor_len = cursor.chars().count();
+    let max_query_display = available_width.saturating_sub(prefix_len + cursor_len);
+
+    // Truncate query from left if too long
+    let displayed_query = if query.chars().count() > max_query_display {
+        let skip = query.chars().count() - max_query_display;
+        query.chars().skip(skip).collect::<String>()
+    } else {
+        query.to_string()
+    };
+
+    let line = Line::from(vec![
+        Span::styled(prefix, Style::default().fg(Color::Yellow)),
+        Span::styled(displayed_query, Style::default().fg(Color::White)),
+        Span::styled(cursor, Style::default().fg(Color::White)),
+    ]);
+
+    let search_bar = Paragraph::new(line).style(Style::default().bg(Color::DarkGray));
+    frame.render_widget(search_bar, area);
 }
 
 fn render_header(frame: &mut Frame, area: Rect) {
@@ -454,30 +525,38 @@ fn render_header(frame: &mut Frame, area: Rect) {
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
-    let keybindings = if app.output_focused {
-        // Show scroll indicator if user has scrolled up
-        let scroll_hint = app
-            .selected_agent()
-            .map(|a| {
-                if a.scroll_offset > 0 {
-                    format!(" │ Scrolled +{}", a.scroll_offset)
-                } else {
-                    String::new()
-                }
-            })
-            .unwrap_or_default();
-        format!(
-            "Type to interact │ Tab: back │ Scroll: Shift+↑/↓ │ Ctrl+C: interrupt{}",
-            scroll_hint
-        )
-    } else {
-        // Show different hints based on selected agent type
-        let can_pause = app.selected_agent().map(|a| a.can_pause()).unwrap_or(true);
+    let keybindings = match &app.search_mode {
+        SearchMode::Searching(_) => "Type to search │ Enter: confirm │ Esc: cancel".to_string(),
+        SearchMode::Navigating(_) => {
+            "n/N: next/prev match │ j/k: scroll │ q/Esc: exit search".to_string()
+        }
+        SearchMode::Off => {
+            if app.output_focused {
+                // Show scroll indicator if user has scrolled up
+                let scroll_hint = app
+                    .selected_agent()
+                    .map(|a| {
+                        if a.scroll_offset > 0 {
+                            format!(" │ Scrolled +{}", a.scroll_offset)
+                        } else {
+                            String::new()
+                        }
+                    })
+                    .unwrap_or_default();
+                format!(
+                    "Type to interact │ Tab: back │ Scroll: Shift+↑/↓ │ Ctrl+F: search │ Ctrl+C: interrupt{}",
+                    scroll_hint
+                )
+            } else {
+                // Show different hints based on selected agent type
+                let can_pause = app.selected_agent().map(|a| a.can_pause()).unwrap_or(true);
 
-        if can_pause {
-            "j/k: nav │ Space: focus │ r: run │ s: stop │ p: pause │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
-        } else {
-            "j/k: nav │ Space: focus │ r: run │ s: stop │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
+                if can_pause {
+                    "j/k: nav │ Space: focus │ r: run │ s: stop │ p: pause │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
+                } else {
+                    "j/k: nav │ Space: focus │ r: run │ s: stop │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
+                }
+            }
         }
     };
 

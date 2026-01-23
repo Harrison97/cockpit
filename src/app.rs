@@ -29,8 +29,8 @@ pub enum SearchMode {
     Off,
     /// User is typing a search query
     Searching(String),
-    /// Search complete, user is navigating through matches
-    Navigating,
+    /// Search complete, user is navigating through matches (stores the query)
+    Navigating(String),
 }
 
 const OUTPUT_CHANNEL_SIZE: usize = 1000;
@@ -563,9 +563,22 @@ impl App {
 
         // When output is focused
         if self.output_focused {
+            // Handle search mode if active
+            if self.search_mode != SearchMode::Off {
+                return self.handle_search_key(code, modifiers);
+            }
+
             // TAB unfocuses the terminal
             if code == KeyCode::Tab {
                 self.unfocus_output();
+                return true;
+            }
+
+            // Ctrl+F enters search mode
+            if code == KeyCode::Char('f') && modifiers.contains(KeyModifiers::CONTROL) {
+                self.search_mode = SearchMode::Searching(String::new());
+                self.search_matches.clear();
+                self.search_current = 0;
                 return true;
             }
 
@@ -712,6 +725,81 @@ impl App {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Handle key events while in search mode
+    fn handle_search_key(
+        &mut self,
+        code: crossterm::event::KeyCode,
+        _modifiers: crossterm::event::KeyModifiers,
+    ) -> bool {
+        use crossterm::event::KeyCode;
+
+        match &self.search_mode {
+            SearchMode::Off => false,
+            SearchMode::Searching(query) => {
+                match code {
+                    KeyCode::Enter => {
+                        // Confirm search and switch to navigation mode
+                        if !query.is_empty() {
+                            let query = query.clone();
+                            self.search_mode = SearchMode::Navigating(query);
+                        } else {
+                            // Empty query - exit search
+                            self.exit_search_mode();
+                        }
+                        true
+                    }
+                    KeyCode::Esc => {
+                        // Cancel search and return to focused mode
+                        self.exit_search_mode();
+                        true
+                    }
+                    KeyCode::Backspace => {
+                        // Remove last character from query
+                        let mut new_query = query.clone();
+                        new_query.pop();
+                        self.search_mode = SearchMode::Searching(new_query);
+                        true
+                    }
+                    KeyCode::Char(c) => {
+                        // Add character to query
+                        let mut new_query = query.clone();
+                        new_query.push(c);
+                        self.search_mode = SearchMode::Searching(new_query);
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            SearchMode::Navigating(_query) => {
+                // Navigation mode will be fully implemented in task 11.4
+                // For now, just handle exit keys
+                match code {
+                    KeyCode::Esc | KeyCode::Char('q') => {
+                        self.exit_search_mode();
+                        true
+                    }
+                    _ => false,
+                }
+            }
+        }
+    }
+
+    /// Exit search mode and return to normal focused state
+    fn exit_search_mode(&mut self) {
+        self.search_mode = SearchMode::Off;
+        self.search_matches.clear();
+        self.search_current = 0;
+    }
+
+    /// Get the current search query if in search mode
+    pub fn search_query(&self) -> Option<&str> {
+        match &self.search_mode {
+            SearchMode::Searching(query) => Some(query),
+            SearchMode::Navigating(query) => Some(query),
+            SearchMode::Off => None,
         }
     }
 
