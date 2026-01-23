@@ -1,4 +1,6 @@
-use std::fs;
+use chrono::Local;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Represents a ralph project directory structure.
@@ -105,5 +107,30 @@ impl RalphProject {
             specs_dir,
             instructions_path,
         })
+    }
+
+    /// Append an instruction for the next iteration.
+    ///
+    /// Creates PRIORITY_INSTRUCTIONS.md if it doesn't exist, then appends
+    /// a timestamped instruction entry.
+    pub fn append_instruction(
+        &self,
+        text: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.instructions_path)?;
+
+        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
+
+        writeln!(file, "## [{timestamp}]")?;
+        writeln!(file)?;
+        writeln!(file, "{text}")?;
+        writeln!(file)?;
+        writeln!(file, "---")?;
+        writeln!(file)?;
+
+        Ok(())
     }
 }

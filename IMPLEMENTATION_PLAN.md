@@ -108,7 +108,7 @@
 
 ## Phase 5: Instructions/Intervention
 
-- [ ] **5.1 Implement instruction appending**
+- [x] **5.1 Implement instruction appending**
   - Method: `RalphProject::append_instruction(text: &str) -> Result<()>`
   - Create/append to PRIORITY_INSTRUCTIONS.md
   - File will be read by next Claude iteration
