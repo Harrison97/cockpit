@@ -348,8 +348,13 @@ impl RalphLoop {
                     error_msg.into_bytes(),
                 ));
                 // Clear PTY resources on error to prevent leaks
-                *pty_writer.lock().unwrap() = None;
-                *pty_master.lock().unwrap() = None;
+                // Handle poisoned mutex gracefully - we're in error recovery anyway
+                if let Ok(mut guard) = pty_writer.lock() {
+                    *guard = None;
+                }
+                if let Ok(mut guard) = pty_master.lock() {
+                    *guard = None;
+                }
                 // For Claude instances, don't retry on error - just stop
                 if !is_ralph_loop {
                     running.store(false, Ordering::SeqCst);
@@ -446,15 +451,33 @@ impl RalphLoop {
             .map_err(|e| LoopError::PtyError(e.to_string()))?;
 
         // Store writer for input forwarding
-        *pty_writer.lock().unwrap() = Some(writer);
+        // Handle poisoned mutex - if poisoned, we can't proceed safely
+        match pty_writer.lock() {
+            Ok(mut guard) => *guard = Some(writer),
+            Err(poisoned) => {
+                // Recover from poisoned mutex by extracting the guard
+                let mut guard = poisoned.into_inner();
+                *guard = Some(writer);
+            }
+        }
 
         // Store master for resizing
-        *pty_master.lock().unwrap() = Some(pair.master);
+        match pty_master.lock() {
+            Ok(mut guard) => *guard = Some(pair.master),
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                *guard = Some(pair.master);
+            }
+        }
 
         // prompt_content was already validated but we pipe from file directly for ralph loops
         let _ = prompt_content;
 
-        *last_activity.lock().unwrap() = Instant::now();
+        // Reset activity timer - handle poisoned mutex gracefully
+        match last_activity.lock() {
+            Ok(mut guard) => *guard = Instant::now(),
+            Err(poisoned) => *poisoned.into_inner() = Instant::now(),
+        }
 
         // Read in a separate thread so we can check child status without blocking
         let (read_tx, read_rx) = std::sync::mpsc::channel::<Vec<u8>>();
@@ -526,7 +549,10 @@ impl RalphLoop {
 
             // Only apply idle timeout for ralph loops, not Claude instances
             if is_ralph_loop {
-                let idle_duration = last_activity.lock().unwrap().elapsed();
+                let idle_duration = match last_activity.lock() {
+                    Ok(guard) => guard.elapsed(),
+                    Err(poisoned) => poisoned.into_inner().elapsed(),
+                };
                 if !paused.load(Ordering::SeqCst)
                     && idle_duration > Duration::from_secs(IDLE_TIMEOUT_SECS)
                 {
@@ -544,7 +570,10 @@ impl RalphLoop {
             // Check for data with timeout
             match read_rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(data) => {
-                    *last_activity.lock().unwrap() = Instant::now();
+                    match last_activity.lock() {
+                        Ok(mut guard) => *guard = Instant::now(),
+                        Err(poisoned) => *poisoned.into_inner() = Instant::now(),
+                    }
                     let _ = tx.blocking_send(TerminalData::new(agent_name.to_string(), data));
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
@@ -575,9 +604,17 @@ impl RalphLoop {
             std::thread::sleep(Duration::from_millis(50));
         }
 
-        // Clear writer and master
-        *pty_writer.lock().unwrap() = None;
-        *pty_master.lock().unwrap() = None;
+        // Clear writer and master - handle poisoned mutex gracefully
+        if let Ok(mut guard) = pty_writer.lock() {
+            *guard = None;
+        } else if let Err(poisoned) = pty_writer.lock() {
+            *poisoned.into_inner() = None;
+        }
+        if let Ok(mut guard) = pty_master.lock() {
+            *guard = None;
+        } else if let Err(poisoned) = pty_master.lock() {
+            *poisoned.into_inner() = None;
+        }
 
         Ok(())
     }
