@@ -93,7 +93,7 @@
   - When focused: j/k scroll output, Esc unfocuses
   - Visual indicator when focused (brighter border)
 
-- [ ] **4.6 Implement quit keybindings**
+- [x] **4.6 Implement quit keybindings**
   - q: quit application
   - Ctrl+C: quit application
 
