@@ -61,7 +61,7 @@
 
 ## Phase 3: Ralph Project Structure
 
-- [ ] **3.1 Implement RalphProject struct**
+- [x] **3.1 Implement RalphProject struct**
   - Fields: root, prompt_path, plan_path, specs_dir
   - Method: `from_path(path: PathBuf) -> Result<Self>`
   - Validate required files exist (PROMPT.md)
