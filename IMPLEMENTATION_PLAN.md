@@ -207,7 +207,7 @@
   - Automatically set agent status to Stopped
   - Show "[Exited]" message in terminal, no restart message
 
-- [ ] **9.6 Simplify keybindings**
+- [x] **9.6 Simplify keybindings**
   - `s` = stop (unchanged)
   - `r` = resume if paused, OR start if stopped (merge S and r)
   - `p` = pause (unchanged)

@@ -132,6 +132,20 @@ impl App {
         }
     }
 
+    /// Run or resume the selected agent.
+    /// If stopped, starts the agent. If paused, resumes it.
+    pub fn run_or_resume_selected(&mut self) {
+        if let Some(agent) = self.agents.get(self.selected_index) {
+            match agent.status {
+                AgentStatus::Stopped => self.start_selected(),
+                AgentStatus::Paused => self.resume_selected(),
+                AgentStatus::Running => {
+                    // Already running, nothing to do
+                }
+            }
+        }
+    }
+
     pub fn start_selected(&mut self) {
         let tx = self.terminal_tx.clone();
         if let Some(agent) = self.selected_agent_mut() {
@@ -537,16 +551,12 @@ impl App {
                     self.select_last();
                     true
                 }
-                KeyCode::Char('S') => {
-                    self.start_selected();
-                    true
-                }
                 KeyCode::Char('p') => {
                     self.pause_selected();
                     true
                 }
                 KeyCode::Char('r') => {
-                    self.resume_selected();
+                    self.run_or_resume_selected();
                     true
                 }
                 KeyCode::Char('s') => {

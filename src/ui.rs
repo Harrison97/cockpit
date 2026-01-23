@@ -312,9 +312,9 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         let can_pause = app.selected_agent().map(|a| a.can_pause()).unwrap_or(true);
 
         if can_pause {
-            "j/k: nav │ Tab: focus │ S: start │ s: stop │ p: pause │ r: resume │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
+            "j/k: nav │ Tab: focus │ r: run │ s: stop │ p: pause │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
         } else {
-            "j/k: nav │ Tab: focus │ S: start │ s: stop │ r: resume │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
+            "j/k: nav │ Tab: focus │ r: run │ s: stop │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
         }
     };
 
@@ -560,10 +560,9 @@ fn render_help_screen(frame: &mut Frame) {
             "Agent Control",
             Style::default().add_modifier(Modifier::BOLD),
         )),
-        Line::from("  S           Start agent"),
+        Line::from("  r           Run/Resume agent"),
         Line::from("  s           Stop agent"),
         Line::from("  p           Pause agent (ralph loops only)"),
-        Line::from("  r           Resume agent"),
         Line::from("  Ctrl+C      Interrupt Claude (when focused)"),
         Line::from(""),
         Line::from(Span::styled(
