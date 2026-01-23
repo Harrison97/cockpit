@@ -66,7 +66,7 @@
 
 ## Phase 4: App State and Event Loop
 
-- [ ] **4.1 Create App struct**
+- [x] **4.1 Create App struct**
   - Fields: agents, selected_index, scroll_offset, output_focused, running
   - Implement new() initializing with mock agents
   - Implement select_next(), select_prev(), selected_agent()

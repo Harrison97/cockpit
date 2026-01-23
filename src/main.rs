@@ -1,8 +1,10 @@
 mod agent;
+mod app;
 mod ui;
 
 use std::io;
 
+use app::App;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -27,13 +29,17 @@ fn main() -> io::Result<()> {
 }
 
 fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
-    loop {
+    let mut app = App::new();
+
+    while app.running {
         // Draw the UI
         terminal.draw(|frame| {
-            let area = frame.area();
-            frame.render_widget(
-                ratatui::widgets::Paragraph::new("God Agent Console - Press 'q' or Ctrl+C to quit"),
-                area,
+            ui::render(
+                frame,
+                &app.agents,
+                app.selected_index,
+                app.scroll_offset,
+                app.output_focused,
             );
         })?;
 
@@ -43,11 +49,11 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
                 // Only handle key press events (not release)
                 if key.kind == KeyEventKind::Press {
                     match key.code {
-                        KeyCode::Char('q') => break,
+                        KeyCode::Char('q') => app.running = false,
                         KeyCode::Char('c')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
-                            break;
+                            app.running = false;
                         }
                         _ => {}
                     }
