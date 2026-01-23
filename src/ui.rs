@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
 use tui_term::widget::PseudoTerminal;
@@ -63,6 +63,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
     // Render help screen if showing
     if app.show_help {
         render_help_screen(frame);
+    }
+
+    // Render delete confirmation if showing
+    if app.show_delete_confirm {
+        render_delete_confirm(frame, app);
     }
 }
 
@@ -165,10 +170,10 @@ fn render_agent_list(frame: &mut Frame, area: Rect, agents: &[Agent], selected_i
             lines.push(Line::from(Span::styled(loop_text, loop_style)));
         }
 
-        // Line 5: Project path
-        if let Some(ref project_path) = agent.project_path {
+        // Line 5: Working directory (the target repo)
+        if let Some(ref working_dir) = agent.working_dir {
             let max_path_len = (inner_area.width as usize).saturating_sub(2);
-            let path_str = project_path.to_string_lossy();
+            let path_str = working_dir.to_string_lossy();
             let truncated_path = if path_str.len() > max_path_len {
                 format!("…{}", &path_str[path_str.len() - max_path_len + 1..])
             } else {
@@ -209,9 +214,9 @@ fn render_terminal_pane(
     let title = match agent {
         Some(a) => {
             let focus_hint = if output_focused {
-                " [FOCUSED - Esc to exit]"
+                " [FOCUSED - Tab to exit]"
             } else {
-                " [Enter to focus]"
+                " [Tab/Enter to focus]"
             };
             format!("{}{}", a.name, focus_hint)
         }
@@ -298,9 +303,9 @@ fn render_header(frame: &mut Frame, area: Rect) {
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let keybindings = if app.output_focused {
-        "Type to interact │ Esc: back │ Ctrl+C: quit"
+        "Type to interact │ Tab: back │ Ctrl+C: interrupt"
     } else {
-        "j/k: nav │ Enter: focus │ S: start │ s: stop │ p: pause │ r: resume │ n: new │ i: msg │ d: delete │ ?: help │ q: quit"
+        "j/k: nav │ Tab: focus │ S: start │ s: stop │ p: pause │ r: resume │ n: new │ i: msg │ d: delete │ ?: help │ q: quit"
     };
 
     // Show status message if available, otherwise show keybindings
@@ -319,23 +324,54 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_input_box(frame: &mut Frame, app: &App) {
     let area = frame.area();
-    let input_area = Rect {
-        x: area.width / 4,
-        y: area.height / 2 - 2,
-        width: area.width / 2,
-        height: 5,
+
+    // Use different sizes based on input mode - larger for prompts/instructions
+    let is_multiline_mode = matches!(
+        app.input_mode,
+        InputMode::EnteringPrompt | InputMode::EnteringInstruction
+    );
+
+    let (box_width, box_height) = if is_multiline_mode {
+        // Larger box for prompts and instructions (70% width, up to 16 lines)
+        let w = (area.width * 70 / 100).max(60).min(area.width - 4);
+        let h = 16.min(area.height - 4);
+        (w, h)
+    } else {
+        // Smaller box for path/name (50% width, 5 lines)
+        let w = area.width / 2;
+        let h = 5u16;
+        (w, h)
     };
 
-    // Clear the area behind the input box
-    let clear = Block::default().style(Style::default().bg(Color::Black));
-    frame.render_widget(clear, input_area);
+    let input_area = Rect {
+        x: (area.width - box_width) / 2,
+        y: (area.height - box_height) / 2,
+        width: box_width,
+        height: box_height,
+    };
 
+    // Clear the area behind the input box completely
+    frame.render_widget(Clear, input_area);
+
+    let line_count = app.input_buffer.lines().count();
     let title = match app.input_mode {
-        InputMode::EnteringPath => "New Agent - Step 1/3",
-        InputMode::EnteringName => "New Agent - Step 2/3",
-        InputMode::EnteringPrompt => "New Agent - Step 3/3",
-        InputMode::EnteringInstruction => "Send Message",
-        InputMode::Normal => "",
+        InputMode::EnteringPath => "New Agent - Step 1/3".to_string(),
+        InputMode::EnteringName => "New Agent - Step 2/3".to_string(),
+        InputMode::EnteringPrompt => {
+            if line_count > 1 {
+                format!("New Agent - Step 3/3 ({} lines)", line_count)
+            } else {
+                "New Agent - Step 3/3".to_string()
+            }
+        }
+        InputMode::EnteringInstruction => {
+            if line_count > 1 {
+                format!("Send Message ({} lines)", line_count)
+            } else {
+                "Send Message".to_string()
+            }
+        }
+        InputMode::Normal => String::new(),
     };
 
     let block = Block::default()
@@ -347,23 +383,128 @@ fn render_input_box(frame: &mut Frame, app: &App) {
         ))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
 
     let inner_area = block.inner(input_area);
     frame.render_widget(block, input_area);
 
     let prompt = app.input_prompt();
-    let input_text = format!("{}{}_", prompt, app.input_buffer);
+    let available_width = inner_area.width as usize;
+    // Reserve 2 lines: one for the hint, one blank line before it
+    let available_lines = (inner_area.height as usize).saturating_sub(2);
 
-    let input_line = Line::from(Span::styled(input_text, Style::default().fg(Color::White)));
+    if is_multiline_mode && available_lines > 1 {
+        // Calculate where to render the main content (leave room for hint at bottom)
+        let content_area = Rect {
+            x: inner_area.x,
+            y: inner_area.y,
+            width: inner_area.width,
+            height: inner_area.height.saturating_sub(2),
+        };
 
-    let hint = Line::from(Span::styled(
-        "Enter to confirm, Esc to cancel",
-        Style::default().fg(Color::DarkGray),
-    ));
+        // Check if we have paste info - if so, show a compact indicator instead of full text
+        if let Some((char_count, line_count)) = app.paste_info {
+            let paste_indicator = if line_count > 1 {
+                format!("[Pasted {} chars, {} lines]", char_count, line_count)
+            } else {
+                format!("[Pasted {} chars]", char_count)
+            };
 
-    let content = Paragraph::new(vec![input_line, Line::from(""), hint]);
-    frame.render_widget(content, inner_area);
+            let lines = vec![Line::from(vec![
+                Span::styled(prompt, Style::default().fg(Color::DarkGray)),
+                Span::styled(paste_indicator, Style::default().fg(Color::Cyan)),
+            ])];
+
+            let content = Paragraph::new(lines).style(Style::default().bg(Color::Black));
+            frame.render_widget(content, content_area);
+        } else {
+            // Normal display - show actual text
+            let mut lines: Vec<Line> = Vec::new();
+
+            // First line includes the prompt (gray) followed by first line of input (white)
+            let input_lines: Vec<&str> = app.input_buffer.split('\n').collect();
+
+            if input_lines.is_empty() || (input_lines.len() == 1 && input_lines[0].is_empty()) {
+                // Empty input - just show prompt and cursor
+                lines.push(Line::from(vec![
+                    Span::styled(prompt, Style::default().fg(Color::DarkGray)),
+                    Span::styled("_", Style::default().fg(Color::White)),
+                ]));
+            } else {
+                // First line: prompt + first line of input
+                lines.push(Line::from(vec![
+                    Span::styled(prompt, Style::default().fg(Color::DarkGray)),
+                    Span::styled(input_lines[0], Style::default().fg(Color::White)),
+                ]));
+
+                // Remaining lines of input
+                for line in input_lines.iter().skip(1) {
+                    lines.push(Line::from(Span::styled(
+                        *line,
+                        Style::default().fg(Color::White),
+                    )));
+                }
+
+                // Add cursor to last line (or new line if buffer ends with newline)
+                if app.input_buffer.ends_with('\n') {
+                    lines.push(Line::from(Span::styled(
+                        "_",
+                        Style::default().fg(Color::White),
+                    )));
+                } else if let Some(last) = lines.last_mut() {
+                    last.spans
+                        .push(Span::styled("_", Style::default().fg(Color::White)));
+                }
+            }
+
+            // Build the content with proper wrapping
+            let content = Paragraph::new(lines)
+                .style(Style::default().bg(Color::Black))
+                .wrap(Wrap { trim: false });
+
+            frame.render_widget(content, content_area);
+        }
+
+        // Render hint at the bottom
+        let hint_area = Rect {
+            x: inner_area.x,
+            y: inner_area.y + inner_area.height.saturating_sub(1),
+            width: inner_area.width,
+            height: 1,
+        };
+        let hint = Paragraph::new(Span::styled(
+            "Enter: submit │ \\+Enter: newline │ Esc: cancel",
+            Style::default().fg(Color::DarkGray),
+        ))
+        .style(Style::default().bg(Color::Black));
+        frame.render_widget(hint, hint_area);
+    } else {
+        // Single-line display mode (for path/name)
+        let cursor = "_";
+        let full_text = format!("{}{}{}", prompt, app.input_buffer, cursor);
+
+        // Scroll horizontally to show end of text (where cursor is)
+        let visible_text = if full_text.chars().count() > available_width {
+            let skip = full_text.chars().count() - available_width;
+            full_text.chars().skip(skip).collect::<String>()
+        } else {
+            full_text
+        };
+
+        let input_line = Line::from(Span::styled(
+            visible_text,
+            Style::default().fg(Color::White),
+        ));
+        let hint = Line::from(Span::styled(
+            "Enter: submit │ Esc: cancel",
+            Style::default().fg(Color::DarkGray),
+        ));
+
+        let content = Paragraph::new(vec![input_line, Line::from(""), hint])
+            .style(Style::default().bg(Color::Black));
+        frame.render_widget(content, inner_area);
+    }
 }
 
 fn render_help_screen(frame: &mut Frame) {
@@ -378,8 +519,8 @@ fn render_help_screen(frame: &mut Frame) {
         height: help_height,
     };
 
-    let clear = Block::default().style(Style::default().bg(Color::Black));
-    frame.render_widget(clear, help_area);
+    // Clear the area behind the help screen completely
+    frame.render_widget(Clear, help_area);
 
     let block = Block::default()
         .title(Span::styled(
@@ -390,7 +531,8 @@ fn render_help_screen(frame: &mut Frame) {
         ))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
 
     let inner_area = block.inner(help_area);
     frame.render_widget(block, help_area);
@@ -401,8 +543,8 @@ fn render_help_screen(frame: &mut Frame) {
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from("  j/k, ↑/↓    Navigate agents"),
-        Line::from("  Enter       Focus terminal (type to interact)"),
-        Line::from("  Esc         Unfocus terminal"),
+        Line::from("  Tab/Enter   Focus terminal (type to interact)"),
+        Line::from("  Tab         Unfocus terminal"),
         Line::from(""),
         Line::from(Span::styled(
             "Agent Control",
@@ -412,6 +554,7 @@ fn render_help_screen(frame: &mut Frame) {
         Line::from("  s           Stop agent"),
         Line::from("  p           Pause agent (SIGSTOP)"),
         Line::from("  r           Resume agent (SIGCONT)"),
+        Line::from("  Ctrl+C      Interrupt Claude (when focused)"),
         Line::from(""),
         Line::from(Span::styled(
             "Management",
@@ -422,11 +565,67 @@ fn render_help_screen(frame: &mut Frame) {
         Line::from("  d           Delete agent"),
         Line::from(""),
         Line::from(Span::styled(
+            "Input Mode",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from("  Enter       Submit input"),
+        Line::from("  \\+Enter     Add newline"),
+        Line::from("  Esc         Cancel"),
+        Line::from(""),
+        Line::from(Span::styled(
             "Press any key to close",
             Style::default().fg(Color::DarkGray),
         )),
     ];
 
-    let help = Paragraph::new(help_text);
+    let help = Paragraph::new(help_text).style(Style::default().bg(Color::Black));
     frame.render_widget(help, inner_area);
+}
+
+fn render_delete_confirm(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+
+    let box_width = 40.min(area.width - 4);
+    let box_height = 5;
+
+    let confirm_area = Rect {
+        x: (area.width - box_width) / 2,
+        y: (area.height - box_height) / 2,
+        width: box_width,
+        height: box_height,
+    };
+
+    frame.render_widget(Clear, confirm_area);
+
+    let agent_name = app
+        .selected_agent()
+        .map(|a| a.name.as_str())
+        .unwrap_or("agent");
+
+    let block = Block::default()
+        .title(Span::styled(
+            " Confirm Delete ",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Red))
+        .style(Style::default().bg(Color::Black));
+
+    let inner_area = block.inner(confirm_area);
+    frame.render_widget(block, confirm_area);
+
+    let text = vec![
+        Line::from(format!("Delete \"{}\"?", agent_name)),
+        Line::from(""),
+        Line::from(Span::styled(
+            "y: confirm │ any other key: cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let content = Paragraph::new(text)
+        .style(Style::default().bg(Color::Black))
+        .alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(content, inner_area);
 }

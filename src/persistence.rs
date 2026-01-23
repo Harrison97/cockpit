@@ -35,7 +35,11 @@ pub fn get_state_file_path() -> Option<PathBuf> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoopState {
     pub name: String,
+    /// The agent's internal directory (.agents/<name>) where PROMPT.md lives
     pub project_path: PathBuf,
+    /// The target repo root where the agent executes commands
+    #[serde(default)]
+    pub working_dir: Option<PathBuf>,
     pub last_iteration: u32,
 }
 

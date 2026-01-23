@@ -37,10 +37,13 @@ pub struct App {
     terminal_rx: mpsc::Receiver<TerminalData>,
     pub input_mode: InputMode,
     pub input_buffer: String,
+    /// If Some, input contains a paste - stores (char_count, line_count)
+    pub paste_info: Option<(usize, usize)>,
     pending_project_path: Option<PathBuf>,
     pending_agent_name: Option<String>,
     pub status_message: Option<String>,
     pub show_help: bool,
+    pub show_delete_confirm: bool,
 }
 
 impl App {
@@ -58,10 +61,12 @@ impl App {
             terminal_rx,
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
+            paste_info: None,
             pending_project_path: None,
             pending_agent_name: None,
             status_message: None,
             show_help: false,
+            show_delete_confirm: false,
         }
     }
 
@@ -221,12 +226,14 @@ impl App {
     pub fn start_new_loop(&mut self) {
         self.input_mode = InputMode::EnteringPath;
         self.input_buffer.clear();
+        self.paste_info = None;
         self.pending_project_path = None;
     }
 
     pub fn cancel_input(&mut self) {
         self.input_mode = InputMode::Normal;
         self.input_buffer.clear();
+        self.paste_info = None;
         self.pending_project_path = None;
         self.pending_agent_name = None;
     }
@@ -244,6 +251,7 @@ impl App {
 
         self.input_mode = InputMode::EnteringInstruction;
         self.input_buffer.clear();
+        self.paste_info = None;
     }
 
     fn submit_input(&mut self) {
@@ -257,6 +265,7 @@ impl App {
                 }
                 self.pending_project_path = Some(path);
                 self.input_buffer.clear();
+                self.paste_info = None;
                 self.input_mode = InputMode::EnteringName;
             }
             InputMode::EnteringName => {
@@ -276,6 +285,7 @@ impl App {
                     self.pending_agent_name = Some(name);
                 }
                 self.input_buffer.clear();
+                self.paste_info = None;
                 self.input_mode = InputMode::EnteringPrompt;
             }
             InputMode::EnteringPrompt => {
@@ -300,17 +310,14 @@ impl App {
             return;
         };
 
-        let prompt_content = if self.input_buffer.trim().is_empty() {
-            default_prompt_content()
-        } else {
-            self.input_buffer.clone()
-        };
+        let prompt_content = self.input_buffer.clone();
 
         let project_path = base_path.join(".agents").join(&agent_name);
+        let working_dir = base_path.clone();
 
         match RalphProject::create(project_path.clone(), &prompt_content) {
             Ok(_project) => {
-                let agent = Agent::with_project(&agent_name, project_path);
+                let agent = Agent::with_project(&agent_name, project_path, working_dir);
                 self.agents.push(agent);
                 self.selected_index = self.agents.len() - 1;
                 self.status_message = Some(format!("Created loop: {}", agent_name));
@@ -375,8 +382,30 @@ impl App {
             InputMode::Normal => "",
             InputMode::EnteringPath => "Target repo path: ",
             InputMode::EnteringName => "Agent name: ",
-            InputMode::EnteringPrompt => "Prompt (Enter for default): ",
+            InputMode::EnteringPrompt => "Prompt (optional): ",
             InputMode::EnteringInstruction => "Message to Claude: ",
+        }
+    }
+
+    /// Handle pasted text (preserves newlines from clipboard)
+    pub fn handle_paste(&mut self, text: &str) {
+        if self.input_mode != InputMode::Normal {
+            // Only normalize line endings, preserve everything else as-is
+            let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+
+            // Track paste info for display
+            let char_count = normalized.chars().count();
+            let line_count = normalized.lines().count().max(1);
+            if char_count > 0 {
+                self.paste_info = Some((char_count, line_count));
+            }
+
+            self.input_buffer.push_str(&normalized);
+        } else if self.output_focused {
+            // When focused on terminal, send paste to the agent's PTY (raw, no sanitization)
+            if let Some(agent) = self.selected_agent() {
+                let _ = agent.send_input(text.as_bytes());
+            }
         }
     }
 
@@ -402,30 +431,31 @@ impl App {
             return true;
         }
 
-        // Global quit keybindings
-        match code {
-            KeyCode::Char('q') if !self.output_focused => {
-                self.running = false;
-                return true;
+        // If delete confirmation is showing, handle y/n
+        if self.show_delete_confirm {
+            match code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.show_delete_confirm = false;
+                    self.delete_selected();
+                }
+                _ => {
+                    self.show_delete_confirm = false;
+                }
             }
-            KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-                self.running = false;
-                return true;
-            }
-            _ => {}
+            return true;
         }
 
-        // When output is focused and agent is running or paused, forward most keys to PTY
+        // When output is focused and agent is running or paused, forward keys to PTY
         if self.output_focused {
             if let Some(agent) = self.selected_agent() {
                 if agent.status == AgentStatus::Running || agent.status == AgentStatus::Paused {
-                    // Escape unfocuses
-                    if code == KeyCode::Esc {
+                    // TAB unfocuses the terminal
+                    if code == KeyCode::Tab {
                         self.unfocus_output();
                         return true;
                     }
 
-                    // Forward key to PTY
+                    // Forward ALL keys to PTY (including Ctrl+C, Esc)
                     let bytes = key_to_bytes(code, modifiers);
                     if !bytes.is_empty() {
                         self.send_input_to_agent(&bytes);
@@ -434,22 +464,31 @@ impl App {
                 }
             }
 
-            // If not running or unhandled, use scroll keybindings
+            // If not running or unhandled, Tab or Esc unfocuses
             match code {
-                KeyCode::Esc => {
+                KeyCode::Tab | KeyCode::Esc => {
                     self.unfocus_output();
                     true
                 }
                 _ => false,
             }
         } else {
-            // Agent list focused
+            // Agent list focused - Ctrl+C quits only when not focused on terminal
+            if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
+                self.running = false;
+                return true;
+            }
+
             match code {
+                KeyCode::Char('q') => {
+                    self.running = false;
+                    true
+                }
                 KeyCode::Char('?') => {
                     self.show_help = true;
                     true
                 }
-                KeyCode::Enter => {
+                KeyCode::Enter | KeyCode::Tab => {
                     self.toggle_focus();
                     true
                 }
@@ -494,7 +533,9 @@ impl App {
                     true
                 }
                 KeyCode::Char('d') => {
-                    self.delete_selected();
+                    if !self.agents.is_empty() {
+                        self.show_delete_confirm = true;
+                    }
                     true
                 }
                 _ => false,
@@ -511,7 +552,14 @@ impl App {
 
         match code {
             KeyCode::Enter => {
-                self.submit_input();
+                // If buffer ends with backslash, replace it with newline (like Claude Code)
+                if self.input_buffer.ends_with('\\') {
+                    self.input_buffer.pop();
+                    self.input_buffer.push('\n');
+                } else {
+                    // Otherwise, submit the input
+                    self.submit_input();
+                }
                 true
             }
             KeyCode::Esc => {
@@ -519,7 +567,13 @@ impl App {
                 true
             }
             KeyCode::Backspace => {
-                self.input_buffer.pop();
+                // If there's pasted content, delete it all at once
+                if self.paste_info.is_some() {
+                    self.input_buffer.clear();
+                    self.paste_info = None;
+                } else {
+                    self.input_buffer.pop();
+                }
                 true
             }
             KeyCode::Char(c) => {
@@ -538,6 +592,7 @@ impl App {
                 state.upsert_loop(LoopState {
                     name: agent.name.clone(),
                     project_path: project_path.clone(),
+                    working_dir: agent.working_dir.clone(),
                     last_iteration: agent.iteration,
                 });
             }
@@ -576,7 +631,18 @@ fn load_agents_from_state() -> Vec<Agent> {
             .loops
             .into_iter()
             .map(|loop_state| {
-                let mut agent = Agent::with_project(&loop_state.name, loop_state.project_path);
+                // For backwards compatibility, derive working_dir from project_path if not set
+                let working_dir = loop_state.working_dir.unwrap_or_else(|| {
+                    // project_path is .agents/<name>, so working_dir is two levels up
+                    loop_state
+                        .project_path
+                        .parent()
+                        .and_then(|p| p.parent())
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|| loop_state.project_path.clone())
+                });
+                let mut agent =
+                    Agent::with_project(&loop_state.name, loop_state.project_path, working_dir);
                 agent.iteration = loop_state.last_iteration;
                 agent
             })
@@ -586,26 +652,6 @@ fn load_agents_from_state() -> Vec<Agent> {
             Vec::new()
         }
     }
-}
-
-fn default_prompt_content() -> String {
-    r#"# Ralph Loop Prompt
-
-You are an autonomous agent running in a loop. Each iteration:
-
-1. Read IMPLEMENTATION_PLAN.md to find the next uncompleted task
-2. Implement the task completely
-3. Run tests and quality checks
-4. Mark the task complete and commit
-5. Exit
-
-## Rules
-
-- Complete ONE task per iteration
-- Always run `cargo build` and `cargo clippy` before committing
-- Keep changes focused and minimal
-"#
-    .to_string()
 }
 
 /// Convert a key event to bytes to send to the PTY

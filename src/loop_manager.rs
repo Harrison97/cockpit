@@ -6,7 +6,7 @@ use nix::unistd::Pid;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use regex::Regex;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -145,7 +145,10 @@ const IDLE_TIMEOUT_SECS: u64 = 2;
 /// Manages a ralph loop using PTY for full terminal emulation.
 /// Auto-restarts when Claude becomes idle (unless paused).
 pub struct RalphLoop {
+    /// The agent's internal directory where PROMPT.md lives
     pub project_path: PathBuf,
+    /// The target repo root where commands are executed
+    pub working_dir: PathBuf,
     pid: Option<u32>,
     paused: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
@@ -156,9 +159,10 @@ pub struct RalphLoop {
 }
 
 impl RalphLoop {
-    pub fn new(project_path: PathBuf) -> Self {
+    pub fn new(project_path: PathBuf, working_dir: PathBuf) -> Self {
         Self {
             project_path,
+            working_dir,
             pid: None,
             paused: Arc::new(AtomicBool::new(false)),
             running: Arc::new(AtomicBool::new(false)),
@@ -235,6 +239,7 @@ impl RalphLoop {
         let paused = self.paused.clone();
         let last_activity = self.last_activity.clone();
         let project_path = self.project_path.clone();
+        let working_dir = self.working_dir.clone();
         let pty_writer = self.pty_writer.clone();
 
         let handle = std::thread::spawn(move || {
@@ -243,6 +248,7 @@ impl RalphLoop {
                 paused,
                 last_activity,
                 project_path,
+                working_dir,
                 prompt_content,
                 agent_name,
                 tx,
@@ -259,6 +265,7 @@ impl RalphLoop {
         paused: Arc<AtomicBool>,
         last_activity: Arc<Mutex<Instant>>,
         project_path: PathBuf,
+        working_dir: PathBuf,
         prompt_content: String,
         agent_name: String,
         tx: mpsc::Sender<TerminalData>,
@@ -276,6 +283,7 @@ impl RalphLoop {
 
             let result = Self::spawn_claude_iteration(
                 &project_path,
+                &working_dir,
                 &prompt_content,
                 &agent_name,
                 &tx,
@@ -305,7 +313,8 @@ impl RalphLoop {
     }
 
     fn spawn_claude_iteration(
-        project_path: &PathBuf,
+        project_path: &Path,
+        working_dir: &Path,
         prompt_content: &str,
         agent_name: &str,
         tx: &mpsc::Sender<TerminalData>,
@@ -324,11 +333,18 @@ impl RalphLoop {
             })
             .map_err(|e| LoopError::PtyError(e.to_string()))?;
 
-        // Use bash to pipe PROMPT.md into claude
+        // Use absolute path to PROMPT.md so we can run claude in working_dir
+        let prompt_path = project_path.join("PROMPT.md");
+        let prompt_path_str = prompt_path.to_string_lossy();
+        let cmd_str = format!(
+            "cat '{}' | claude --dangerously-skip-permissions",
+            prompt_path_str
+        );
+
         let mut cmd = CommandBuilder::new("bash");
         cmd.arg("-c");
-        cmd.arg("cat PROMPT.md | claude --dangerously-skip-permissions");
-        cmd.cwd(project_path);
+        cmd.arg(&cmd_str);
+        cmd.cwd(working_dir);
 
         let mut child = pair
             .slave

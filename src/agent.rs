@@ -74,7 +74,10 @@ pub struct Agent {
     /// Terminal parser for full TUI rendering
     pub terminal: Arc<Mutex<vt100::Parser>>,
     pub iteration: u32,
+    /// The agent's internal directory (.agents/<name>) where PROMPT.md lives
     pub project_path: Option<PathBuf>,
+    /// The target repo root where the agent executes commands
+    pub working_dir: Option<PathBuf>,
     pub ralph_loop: Option<RalphLoop>,
 }
 
@@ -87,11 +90,12 @@ impl Agent {
             terminal: Arc::new(Mutex::new(vt100::Parser::new(TERM_ROWS, TERM_COLS, 1000))),
             iteration: 0,
             project_path: None,
+            working_dir: None,
             ralph_loop: None,
         }
     }
 
-    pub fn with_project(name: &str, project_path: PathBuf) -> Self {
+    pub fn with_project(name: &str, project_path: PathBuf, working_dir: PathBuf) -> Self {
         Self {
             name: name.to_string(),
             status: AgentStatus::Stopped,
@@ -99,6 +103,7 @@ impl Agent {
             terminal: Arc::new(Mutex::new(vt100::Parser::new(TERM_ROWS, TERM_COLS, 1000))),
             iteration: 0,
             project_path: Some(project_path),
+            working_dir: Some(working_dir),
             ralph_loop: None,
         }
     }
@@ -133,7 +138,11 @@ impl Agent {
         }
 
         if let Some(ref project_path) = self.project_path {
-            let mut ralph_loop = RalphLoop::new(project_path.clone());
+            let working_dir = self
+                .working_dir
+                .clone()
+                .unwrap_or_else(|| project_path.clone());
+            let mut ralph_loop = RalphLoop::new(project_path.clone(), working_dir);
 
             let mut last_error = None;
             for attempt in 0..Self::MAX_SPAWN_RETRIES {
