@@ -1,7 +1,9 @@
 use nix::libc;
+use nix::sys::signal::{kill, Signal};
+use nix::unistd::Pid;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -149,6 +151,64 @@ impl RalphLoop {
                 }
             }
         });
+
+        Ok(())
+    }
+
+    /// Stop the ralph loop subprocess.
+    ///
+    /// Sends SIGTERM to the process group, waits up to 5 seconds for graceful shutdown,
+    /// then sends SIGKILL if the process is still running.
+    pub async fn stop(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Get the process group ID, or return early if not running
+        let pgid = match self.pgid {
+            Some(pgid) => pgid,
+            None => {
+                // Already stopped, clear state and return success
+                self.child = None;
+                self.pid = None;
+                return Ok(());
+            }
+        };
+
+        // Send SIGTERM to the entire process group (negative PID targets the group)
+        let _ = kill(Pid::from_raw(-pgid), Signal::SIGTERM);
+
+        // Wait up to 5 seconds for graceful shutdown
+        let deadline = Instant::now() + Duration::from_secs(5);
+
+        if let Some(ref mut child) = self.child {
+            loop {
+                // Check if process has exited using try_wait
+                match child.try_wait() {
+                    Ok(Some(_)) => {
+                        // Process has exited
+                        break;
+                    }
+                    Ok(None) => {
+                        // Still running, check if we've exceeded the timeout
+                        if Instant::now() >= deadline {
+                            // Timeout reached, send SIGKILL to the process group
+                            let _ = kill(Pid::from_raw(-pgid), Signal::SIGKILL);
+                            // Wait a bit more for SIGKILL to take effect
+                            let _ = child.wait().await;
+                            break;
+                        }
+                        // Sleep briefly before checking again
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    Err(_) => {
+                        // Error checking status, assume dead
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Clear all state
+        self.child = None;
+        self.pid = None;
+        self.pgid = None;
 
         Ok(())
     }
