@@ -7,7 +7,7 @@ Last verified: 2026-01-23
 - [x] Scrollback bounded - verified 2026-01-23 (SCROLLBACK_SIZE = 100,000 lines in agent.rs:105)
 - [x] History file capped at 1MB on load - verified 2026-01-23 (MAX_HISTORY_BYTES in agent.rs:294)
 - [x] Channel bounded - verified 2026-01-23 (OUTPUT_CHANNEL_SIZE = 1000 in app.rs:36)
-- [ ] Search matches bounded - needs limit added (currently bounded only by scrollback size)
+- [x] Search matches bounded - verified 2026-01-23 (MAX_SEARCH_MATCHES = 10,000 in agent.rs:107)
 
 ## Process Safety
 

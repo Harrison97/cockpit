@@ -103,6 +103,8 @@ pub const TERM_COLS: u16 = 180;
 pub const TERM_ROWS: u16 = 40;
 /// Scrollback buffer size in lines (~100K lines for unlimited history)
 pub const SCROLLBACK_SIZE: usize = 100_000;
+/// Maximum number of search matches to collect (prevents unbounded memory growth)
+pub const MAX_SEARCH_MATCHES: usize = 10_000;
 
 /// Filter out mouse escape sequences that may leak from PTY
 /// Handles multiple mouse protocols:
@@ -635,6 +637,7 @@ impl Agent {
     /// Returns Vec of (absolute_row, column_start, match_length) where absolute_row
     /// is the row from the top of the entire history (0 = oldest line).
     /// Also returns the scrollback_max value for scroll calculations.
+    /// Limited to MAX_SEARCH_MATCHES to prevent unbounded memory growth.
     pub fn find_all_matches(&self, query: &str) -> (Vec<(usize, usize, usize)>, usize) {
         if query.is_empty() {
             return (Vec::new(), 0);
@@ -659,63 +662,76 @@ impl Agent {
             // through it in chunks by setting different scrollback values.
             let render_max = terminal_height.min(scrollback_max);
 
-            // Helper to search a single row and add matches
-            let search_row =
-                |term: &vt100::Parser,
-                 row: usize,
-                 absolute_row: usize,
-                 matches: &mut Vec<(usize, usize, usize)>| {
-                    let screen = term.screen();
-                    let mut row_chars: Vec<(usize, char)> = Vec::new();
-                    for col in 0..cols {
-                        if let Some(cell) = screen.cell(row as u16, col as u16) {
-                            let contents = cell.contents();
-                            for c in contents.chars() {
-                                row_chars.push((col, c));
-                            }
+            // Helper to search a single row and add matches (returns true if limit reached)
+            let search_row = |term: &vt100::Parser,
+                              row: usize,
+                              absolute_row: usize,
+                              matches: &mut Vec<(usize, usize, usize)>|
+             -> bool {
+                let screen = term.screen();
+                let mut row_chars: Vec<(usize, char)> = Vec::new();
+                for col in 0..cols {
+                    if let Some(cell) = screen.cell(row as u16, col as u16) {
+                        let contents = cell.contents();
+                        for c in contents.chars() {
+                            row_chars.push((col, c));
                         }
                     }
+                }
 
-                    let row_chars_lower: Vec<char> = row_chars
-                        .iter()
-                        .map(|(_, c)| c.to_lowercase().next().unwrap_or(*c))
-                        .collect();
+                let row_chars_lower: Vec<char> = row_chars
+                    .iter()
+                    .map(|(_, c)| c.to_lowercase().next().unwrap_or(*c))
+                    .collect();
 
-                    for start_idx in 0..row_chars_lower.len() {
-                        if start_idx + query_chars.len() > row_chars_lower.len() {
+                for start_idx in 0..row_chars_lower.len() {
+                    if start_idx + query_chars.len() > row_chars_lower.len() {
+                        break;
+                    }
+
+                    let mut found = true;
+                    for (i, qc) in query_chars.iter().enumerate() {
+                        if row_chars_lower[start_idx + i] != *qc {
+                            found = false;
                             break;
                         }
+                    }
 
-                        let mut found = true;
-                        for (i, qc) in query_chars.iter().enumerate() {
-                            if row_chars_lower[start_idx + i] != *qc {
-                                found = false;
-                                break;
-                            }
-                        }
-
-                        if found {
-                            let col = row_chars[start_idx].0;
-                            matches.push((absolute_row, col, query.len()));
+                    if found {
+                        let col = row_chars[start_idx].0;
+                        matches.push((absolute_row, col, query.len()));
+                        // Check limit to prevent unbounded growth
+                        if matches.len() >= MAX_SEARCH_MATCHES {
+                            return true; // Limit reached
                         }
                     }
-                };
+                }
+                false // Limit not reached
+            };
 
             // Search at max render scroll (oldest visible content): absolute rows 0 to rows-1
             term.set_scrollback(render_max);
+            let mut limit_reached = false;
             for row in 0..rows {
                 let absolute_row = row;
-                search_row(&term, row, absolute_row, &mut matches);
+                if search_row(&term, row, absolute_row, &mut matches) {
+                    limit_reached = true;
+                    break;
+                }
             }
 
             // Search at scroll 0 (newest content): absolute rows render_max to render_max+rows-1
             // Skip row 0 at this position since it overlaps with row (rows-1) at max scroll
             // when render_max < rows (the overlap row)
-            term.set_scrollback(0);
-            let start_row = if render_max < rows { 1 } else { 0 };
-            for row in start_row..rows {
-                let absolute_row = render_max + row;
-                search_row(&term, row, absolute_row, &mut matches);
+            if !limit_reached {
+                term.set_scrollback(0);
+                let start_row = if render_max < rows { 1 } else { 0 };
+                for row in start_row..rows {
+                    let absolute_row = render_max + row;
+                    if search_row(&term, row, absolute_row, &mut matches) {
+                        break;
+                    }
+                }
             }
 
             // Sort by absolute row, then column
