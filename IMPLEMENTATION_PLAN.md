@@ -12,7 +12,7 @@
   - Add module declaration in main.rs
   - Define empty `RalphLoop` struct placeholder
 
-- [ ] **1.3 Create project module**
+- [x] **1.3 Create project module**
   - Create `src/project.rs`
   - Add module declaration in main.rs
   - Define empty `RalphProject` struct placeholder

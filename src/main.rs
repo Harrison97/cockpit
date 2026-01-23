@@ -1,6 +1,7 @@
 mod agent;
 mod app;
 mod loop_manager;
+mod project;
 mod ui;
 
 use std::io;
