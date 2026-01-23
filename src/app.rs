@@ -82,6 +82,26 @@ impl App {
         self.agents.get_mut(self.selected_index)
     }
 
+    /// Selects the first agent in the list
+    pub fn select_first(&mut self) {
+        if self.agents.is_empty() {
+            return;
+        }
+        self.selected_index = 0;
+        // Reset scroll offset when changing selection
+        self.scroll_offset = 0;
+    }
+
+    /// Selects the last agent in the list
+    pub fn select_last(&mut self) {
+        if self.agents.is_empty() {
+            return;
+        }
+        self.selected_index = self.agents.len() - 1;
+        // Reset scroll offset when changing selection
+        self.scroll_offset = 0;
+    }
+
     /// Called each frame to update application state
     ///
     /// Updates running agents' mock output periodically (every ~2 seconds)
@@ -122,7 +142,24 @@ impl App {
                 self.running = false;
                 true
             }
-            // Navigation and other keybindings will be added in subsequent tasks
+            // Navigation keybindings
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.select_next();
+                true
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.select_prev();
+                true
+            }
+            KeyCode::Char('g') => {
+                self.select_first();
+                true
+            }
+            KeyCode::Char('G') => {
+                self.select_last();
+                true
+            }
+            // Other keybindings will be added in subsequent tasks
             _ => false,
         }
     }

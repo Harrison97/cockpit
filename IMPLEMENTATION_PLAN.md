@@ -77,7 +77,7 @@
   - On key event: dispatch to handlers
   - On quit: set running = false
 
-- [ ] **4.3 Implement navigation keybindings**
+- [x] **4.3 Implement navigation keybindings**
   - j/Down: select next agent
   - k/Up: select previous agent
   - g: select first agent
