@@ -200,6 +200,7 @@ impl App {
 
     /// Called each frame to update application state.
     /// Drains terminal data and routes to appropriate agents.
+    /// Also detects when subprocesses have exited and updates agent status.
     pub fn tick(&mut self) {
         self.frame_count += 1;
         self.last_tick = Instant::now();
@@ -213,6 +214,23 @@ impl App {
             {
                 agent.process_terminal_data(&term_data.data);
             }
+        }
+
+        // Check for subprocess exits and update agent status accordingly
+        let mut status_changed = false;
+        for agent in &mut self.agents {
+            // If agent status is Running but subprocess is no longer running,
+            // the process has exited naturally (not killed by user)
+            if agent.status == AgentStatus::Running && !agent.is_subprocess_running() {
+                agent.status = AgentStatus::Stopped;
+                agent.start_time = None;
+                status_changed = true;
+            }
+        }
+
+        // Save state if any agent status changed
+        if status_changed {
+            self.save_state();
         }
     }
 

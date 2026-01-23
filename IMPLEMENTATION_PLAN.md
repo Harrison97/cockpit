@@ -202,7 +202,7 @@
   - Add `Agent::can_pause()` method
   - Update UI to gray out or hide pause option for Claude instances
 
-- [ ] **9.5 Detect process exit and update status**
+- [x] **9.5 Detect process exit and update status**
   - When subprocess exits (not killed by user), detect in tick() or via channel
   - Automatically set agent status to Stopped
   - Show "[Exited]" message in terminal, no restart message
