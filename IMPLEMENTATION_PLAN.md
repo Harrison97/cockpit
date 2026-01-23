@@ -265,7 +265,7 @@
 
 ## Phase 12: Block Input During Restarts
 
-- [ ] **12.1 Track process readiness state**
+- [x] **12.1 Track process readiness state**
   - Add `ProcessState` enum: `Starting`, `Ready`, `Stopping`, `Stopped`
   - Add `process_state: ProcessState` to Agent
   - Set to `Starting` when subprocess spawns

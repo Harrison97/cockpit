@@ -382,6 +382,7 @@ impl App {
             if agent.status == AgentStatus::Running && !agent.is_subprocess_running() {
                 agent.status = AgentStatus::Stopped;
                 agent.start_time = None;
+                agent.process_state = crate::agent::ProcessState::Stopped;
                 status_changed = true;
             }
         }

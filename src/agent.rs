@@ -21,6 +21,20 @@ pub enum AgentType {
     ClaudeInstance,
 }
 
+/// Process readiness state for blocking input during transitions
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ProcessState {
+    /// Process is starting up, not yet ready for input
+    Starting,
+    /// Process is ready to receive input
+    Ready,
+    /// Process is shutting down
+    Stopping,
+    /// Process is not running
+    #[default]
+    Stopped,
+}
+
 impl fmt::Display for AgentType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -161,6 +175,8 @@ pub struct Agent {
     pub scroll_offset: u16,
     /// Last known terminal size (rows, cols) for resize optimization
     last_size: (u16, u16),
+    /// Process readiness state for blocking input during transitions
+    pub process_state: ProcessState,
 }
 
 impl Agent {
@@ -177,6 +193,7 @@ impl Agent {
             ralph_loop: None,
             agent_type: AgentType::default(),
             scroll_offset: 0,
+            process_state: ProcessState::Stopped,
         }
     }
 
@@ -198,6 +215,7 @@ impl Agent {
             agent_type,
             scroll_offset: 0,
             last_size: (TERM_ROWS, TERM_COLS),
+            process_state: ProcessState::Stopped,
         }
     }
 
@@ -210,6 +228,11 @@ impl Agent {
 
     /// Process raw terminal data from the PTY
     pub fn process_terminal_data(&mut self, data: &[u8]) {
+        // Transition from Starting to Ready when first output is received
+        if self.process_state == ProcessState::Starting && !data.is_empty() {
+            self.process_state = ProcessState::Ready;
+        }
+
         // Filter out mouse escape sequences that may leak from PTY
         let filtered = filter_mouse_sequences(data);
 
@@ -345,6 +368,9 @@ impl Agent {
         // Reset terminal to fresh state with current size
         self.reset_terminal();
 
+        // Set process state to Starting before spawning
+        self.process_state = ProcessState::Starting;
+
         if let Some(ref project_path) = self.project_path {
             let working_dir = self
                 .working_dir
@@ -360,10 +386,12 @@ impl Agent {
                         self.ralph_loop = Some(ralph_loop);
                         self.status = AgentStatus::Running;
                         self.start_time = Some(Instant::now());
+                        // process_state remains Starting until first output is received
                         return Ok(());
                     }
                     Err(e) => {
                         if !Self::is_transient_error(&e) {
+                            self.process_state = ProcessState::Stopped;
                             return Err(e.into());
                         }
                         last_error = Some(e);
@@ -377,6 +405,7 @@ impl Agent {
                 }
             }
 
+            self.process_state = ProcessState::Stopped;
             return Err(last_error
                 .map(AgentError::from)
                 .unwrap_or_else(|| AgentError::InvalidState("Spawn failed".into())));
@@ -384,6 +413,8 @@ impl Agent {
 
         self.status = AgentStatus::Running;
         self.start_time = Some(Instant::now());
+        // No subprocess, so mark as Ready immediately
+        self.process_state = ProcessState::Ready;
         Ok(())
     }
 
@@ -405,6 +436,9 @@ impl Agent {
     }
 
     pub async fn stop(&mut self) -> Result<(), AgentError> {
+        // Set process state to Stopping during shutdown
+        self.process_state = ProcessState::Stopping;
+
         if let Some(ref mut ralph_loop) = self.ralph_loop {
             let _ = ralph_loop.stop().await;
         }
@@ -412,6 +446,7 @@ impl Agent {
 
         self.status = AgentStatus::Stopped;
         self.start_time = None;
+        self.process_state = ProcessState::Stopped;
         Ok(())
     }
 
@@ -456,6 +491,11 @@ impl Agent {
 
     pub fn is_subprocess_running(&self) -> bool {
         self.ralph_loop.as_ref().is_some_and(|rl| rl.is_running())
+    }
+
+    /// Returns true if the agent is ready to receive input (process is Ready state)
+    pub fn is_ready_for_input(&self) -> bool {
+        self.process_state == ProcessState::Ready
     }
 
     pub fn pid(&self) -> Option<u32> {
