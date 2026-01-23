@@ -133,4 +133,49 @@ impl RalphProject {
 
         Ok(())
     }
+
+    /// Add a high-priority task to the plan.
+    ///
+    /// Reads IMPLEMENTATION_PLAN.md, finds the first `- [ ]` task,
+    /// inserts the new task before it, and writes the file back.
+    pub fn prepend_task(&self, task: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Read current content, or create default if file doesn't exist
+        let content = if self.plan_path.exists() {
+            fs::read_to_string(&self.plan_path)?
+        } else {
+            "# Implementation Plan\n\n## Tasks\n\n".to_string()
+        };
+
+        // Find the first uncompleted task (- [ ])
+        let new_task_line = format!("- [ ] {}", task);
+
+        let mut lines: Vec<&str> = content.lines().collect();
+        let mut insert_index = None;
+
+        for (i, line) in lines.iter().enumerate() {
+            if line.trim_start().starts_with("- [ ]") {
+                insert_index = Some(i);
+                break;
+            }
+        }
+
+        let new_content = match insert_index {
+            Some(idx) => {
+                // Insert new task before the first uncompleted task
+                lines.insert(idx, &new_task_line);
+                lines.join("\n") + "\n"
+            }
+            None => {
+                // No uncompleted tasks found, append to end
+                if content.ends_with('\n') {
+                    format!("{}{}\n", content, new_task_line)
+                } else {
+                    format!("{}\n{}\n", content, new_task_line)
+                }
+            }
+        };
+
+        fs::write(&self.plan_path, new_content)?;
+        Ok(())
+    }
 }
