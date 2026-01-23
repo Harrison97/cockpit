@@ -3,13 +3,12 @@
 #![allow(dead_code)]
 
 use crate::loop_manager::{LoopError, RalphLoop, TerminalData};
-use crate::persistence::get_history_file_path;
 use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -184,6 +183,8 @@ pub struct Agent {
     pub process_state: ProcessState,
     /// File handle for writing terminal history to disk
     history_file: Option<File>,
+    /// Whether history has been loaded (deferred until first resize for correct sizing)
+    history_loaded: bool,
 }
 
 impl Agent {
@@ -206,6 +207,7 @@ impl Agent {
             scroll_offset: 0,
             process_state: ProcessState::Stopped,
             history_file: None,
+            history_loaded: true, // No project = no history to load
         }
     }
 
@@ -221,11 +223,9 @@ impl Agent {
             SCROLLBACK_SIZE,
         )));
 
-        // Load existing history from disk into terminal buffer
-        Self::load_history_into_terminal(name, &terminal);
-
+        // History will be loaded lazily on first resize to use correct terminal size
         // Open history file for appending (creates if needed)
-        let history_file = Self::open_history_file(name);
+        let history_file = Self::open_history_file(&project_path);
 
         Self {
             name: name.to_string(),
@@ -241,12 +241,18 @@ impl Agent {
             last_size: (TERM_ROWS, TERM_COLS),
             process_state: ProcessState::Stopped,
             history_file,
+            history_loaded: false, // Will load on first resize
         }
     }
 
+    /// Get the history file path for this agent (stored in project folder)
+    fn get_history_path(project_path: &Path) -> PathBuf {
+        project_path.join("history.log")
+    }
+
     /// Open the history file for appending, creating the directory structure if needed
-    fn open_history_file(agent_name: &str) -> Option<File> {
-        let path = get_history_file_path(agent_name)?;
+    fn open_history_file(project_path: &Path) -> Option<File> {
+        let path = Self::get_history_path(project_path);
 
         // Create parent directories if needed
         if let Some(parent) = path.parent() {
@@ -268,11 +274,18 @@ impl Agent {
 
     /// Load recent history from disk into the terminal buffer.
     /// Reads the last ~1MB of history to avoid loading huge files.
-    fn load_history_into_terminal(agent_name: &str, terminal: &Arc<Mutex<vt100::Parser>>) {
-        let Some(path) = get_history_file_path(agent_name) else {
+    /// Called lazily on first resize to ensure correct terminal size.
+    fn load_history(&mut self) {
+        if self.history_loaded {
+            return;
+        }
+        self.history_loaded = true;
+
+        let Some(ref project_path) = self.project_path else {
             return;
         };
 
+        let path = Self::get_history_path(project_path);
         if !path.exists() {
             return;
         }
@@ -302,8 +315,8 @@ impl Agent {
             buf
         };
 
-        // Feed the data into the terminal parser
-        if let Ok(mut term) = terminal.lock() {
+        // Feed the data into the terminal parser (already at correct size from resize)
+        if let Ok(mut term) = self.terminal.lock() {
             term.process(&data);
         }
     }
@@ -425,23 +438,29 @@ impl Agent {
 
     /// Resize the terminal to the given dimensions (only if size changed)
     pub fn resize(&mut self, rows: u16, cols: u16) {
-        if self.last_size == (rows, cols) {
-            return;
+        let size_changed = self.last_size != (rows, cols);
+
+        if size_changed {
+            self.last_size = (rows, cols);
+
+            // Reset scroll before resize to avoid stale offset issues
+            self.scroll_offset = 0;
+
+            // Resize the vt100 parser
+            if let Ok(mut term) = self.terminal.lock() {
+                term.set_scrollback(0);
+                term.set_size(rows, cols);
+            }
+
+            // Resize the PTY
+            if let Some(ref ralph_loop) = self.ralph_loop {
+                let _ = ralph_loop.resize(rows, cols);
+            }
         }
-        self.last_size = (rows, cols);
 
-        // Reset scroll before resize to avoid stale offset issues
-        self.scroll_offset = 0;
-
-        // Resize the vt100 parser
-        if let Ok(mut term) = self.terminal.lock() {
-            term.set_scrollback(0);
-            term.set_size(rows, cols);
-        }
-
-        // Resize the PTY
-        if let Some(ref ralph_loop) = self.ralph_loop {
-            let _ = ralph_loop.resize(rows, cols);
+        // Load history after terminal is at correct size (lazy load on first render)
+        if !self.history_loaded {
+            self.load_history();
         }
     }
 
@@ -474,8 +493,9 @@ impl Agent {
             return Ok(());
         }
 
-        // Reset terminal to fresh state with current size
-        self.reset_terminal();
+        // Don't reset terminal - preserve history from previous sessions
+        // Just reset scroll to follow new output
+        self.scroll_offset = 0;
 
         // Set process state to Starting before spawning
         self.process_state = ProcessState::Starting;
