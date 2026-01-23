@@ -20,7 +20,7 @@
   - Implement Display trait for status text
   - Add method to get status color (for UI)
 
-- [ ] **2.2 Create Agent struct**
+- [x] **2.2 Create Agent struct**
   - Fields: name, status, start_time (Option<Instant>), output (Vec<String>), iteration
   - Implement new(), uptime_secs(), add_output()
   - Implement start(), stop(), pause(), resume() methods
