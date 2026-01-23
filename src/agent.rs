@@ -258,7 +258,10 @@ impl Agent {
 
             // Clamp to both (vt100 visible_rows panics if offset > rows.len())
             let safe_max = scrollback_max.min(terminal_height.saturating_sub(1));
-            let new_offset = self.scroll_offset.saturating_add(lines).min(safe_max as u16);
+            let new_offset = self
+                .scroll_offset
+                .saturating_add(lines)
+                .min(safe_max as u16);
             term.set_scrollback(new_offset as usize);
             self.scroll_offset = new_offset;
         }

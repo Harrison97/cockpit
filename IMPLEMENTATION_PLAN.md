@@ -232,7 +232,7 @@
 
 ## Phase 11: Search Mode (Ctrl+F)
 
-- [ ] **11.1 Add SearchMode state to App**
+- [x] **11.1 Add SearchMode state to App**
   - Add `SearchMode` enum: `Off`, `Searching(String)`, `Navigating`
   - Add `search_mode: SearchMode` field to App
   - Add `search_matches: Vec<(usize, usize)>` for match positions (line, col)

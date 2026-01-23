@@ -340,7 +340,10 @@ fn render_terminal_pane(
                         a.scroll_offset, scrollback_size
                     )
                 } else if scrollback_size > 0 {
-                    format!(" [FOCUSED - {} lines history - Tab to exit]", scrollback_size)
+                    format!(
+                        " [FOCUSED - {} lines history - Tab to exit]",
+                        scrollback_size
+                    )
                 } else {
                     " [FOCUSED - Tab to exit]".to_string()
                 }

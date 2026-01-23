@@ -21,6 +21,18 @@ pub enum InputMode {
     EnteringInstruction,
 }
 
+/// Search mode for Ctrl+F terminal search
+#[derive(Clone, PartialEq, Eq, Default)]
+pub enum SearchMode {
+    /// Search is off
+    #[default]
+    Off,
+    /// User is typing a search query
+    Searching(String),
+    /// Search complete, user is navigating through matches
+    Navigating,
+}
+
 const OUTPUT_CHANNEL_SIZE: usize = 1000;
 
 /// Lines per agent entry in the list (name, status, info, type, path + separator)
@@ -49,6 +61,12 @@ pub struct App {
     pub show_delete_confirm: bool,
     /// Scroll offset for agent list (in number of agents)
     pub list_scroll_offset: usize,
+    /// Current search mode for terminal Ctrl+F search
+    pub search_mode: SearchMode,
+    /// Search match positions as (line, column) in the scrollback buffer
+    pub search_matches: Vec<(usize, usize)>,
+    /// Index of the currently highlighted match in search_matches
+    pub search_current: usize,
 }
 
 impl App {
@@ -73,6 +91,9 @@ impl App {
             show_help: false,
             show_delete_confirm: false,
             list_scroll_offset: 0,
+            search_mode: SearchMode::Off,
+            search_matches: Vec::new(),
+            search_current: 0,
         }
     }
 
