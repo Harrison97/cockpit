@@ -136,7 +136,7 @@
   - Struct: `LoopState { name, project_path, last_iteration }`
   - Save on loop creation and status changes
 
-- [ ] **6.3 Implement state loading**
+- [x] **6.3 Implement state loading**
   - Load state file on startup
   - Recreate agents from persisted state
   - All start as Stopped (user must restart)

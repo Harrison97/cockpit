@@ -4,9 +4,9 @@
 
 #![allow(dead_code)] // Methods will be used as more features are implemented
 
-use crate::agent::{create_demo_agents, Agent, AgentStatus};
+use crate::agent::{Agent, AgentStatus};
 use crate::loop_manager::OutputLine;
-use crate::persistence::{save_state, LoopState, PersistedState};
+use crate::persistence::{load_state, save_state, LoopState, PersistedState};
 use crate::project::RalphProject;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -63,9 +63,13 @@ pub struct App {
 }
 
 impl App {
-    /// Creates a new App with demo agents
+    /// Creates a new App, loading persisted state if available
+    ///
+    /// Loads agents from ~/.cockpit/state.json if the file exists.
+    /// All loaded agents start in Stopped status (user must restart manually).
+    /// Falls back to an empty agent list if no state file exists.
     pub fn new() -> Self {
-        let agents = create_demo_agents();
+        let agents = load_agents_from_state();
         let (output_tx, output_rx) = mpsc::channel(OUTPUT_CHANNEL_SIZE);
         Self {
             agents,
@@ -633,6 +637,34 @@ impl App {
                 true
             }
             _ => false,
+        }
+    }
+}
+
+/// Loads agents from persisted state file
+///
+/// Returns agents recreated from ~/.cockpit/state.json.
+/// All agents start in Stopped status - user must manually restart them.
+/// Returns an empty vector if no state file exists or loading fails.
+fn load_agents_from_state() -> Vec<Agent> {
+    match load_state() {
+        Ok(state) => {
+            state
+                .loops
+                .into_iter()
+                .map(|loop_state| {
+                    // Create agent with the persisted project path
+                    // Agent starts Stopped - user must restart manually
+                    let mut agent = Agent::with_project(&loop_state.name, loop_state.project_path);
+                    agent.iteration = loop_state.last_iteration;
+                    agent
+                })
+                .collect()
+        }
+        Err(e) => {
+            // Log error but don't crash - just start with empty list
+            eprintln!("Failed to load state: {}", e);
+            Vec::new()
         }
     }
 }
