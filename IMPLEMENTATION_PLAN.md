@@ -223,7 +223,7 @@
   - Track `scroll_offset` per agent
   - Scroll through vt100 scrollback buffer
 
-- [ ] **10.2 Add left pane scrolling for agent list**
+- [x] **10.2 Add left pane scrolling for agent list**
   - Track `list_scroll_offset` in App
   - When agent count exceeds visible area, enable scrolling
   - Arrow keys (j/k) already move selection; auto-scroll to keep selected visible

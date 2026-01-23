@@ -13,7 +13,7 @@ use ratatui::{
 use tui_term::widget::PseudoTerminal;
 
 use crate::agent::{Agent, AgentStatus, AgentType};
-use crate::app::{App, InputMode};
+use crate::app::{App, InputMode, LINES_PER_AGENT};
 
 fn create_main_layout(area: Rect) -> (Rect, Rect, Rect) {
     let chunks = Layout::default()
@@ -41,12 +41,29 @@ fn create_content_layout(area: Rect) -> (Rect, Rect) {
 }
 
 /// Main draw function - renders the entire UI
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
     let (header_area, main_area, footer_area) = create_main_layout(frame.area());
     let (agent_list_area, output_pane_area) = create_content_layout(main_area);
 
+    // Calculate inner area for agent list to determine visible height
+    let agent_list_inner = {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded);
+        block.inner(agent_list_area)
+    };
+
+    // Ensure selected agent is visible before rendering
+    app.ensure_selected_visible(agent_list_inner.height as usize);
+
     render_header(frame, header_area);
-    render_agent_list(frame, agent_list_area, &app.agents, app.selected_index);
+    render_agent_list(
+        frame,
+        agent_list_area,
+        &app.agents,
+        app.selected_index,
+        app.list_scroll_offset,
+    );
     render_terminal_pane(
         frame,
         output_pane_area,
@@ -71,7 +88,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 }
 
-fn render_agent_list(frame: &mut Frame, area: Rect, agents: &[Agent], selected_index: usize) {
+fn render_agent_list(
+    frame: &mut Frame,
+    area: Rect,
+    agents: &[Agent],
+    selected_index: usize,
+    scroll_offset: usize,
+) {
     let block = Block::default()
         .title(Span::styled(
             "Agents",
@@ -93,9 +116,55 @@ fn render_agent_list(frame: &mut Frame, area: Rect, agents: &[Agent], selected_i
         return;
     }
 
+    // Calculate how many agents can be displayed
+    let visible_lines = inner_area.height as usize;
+    let has_more_above = scroll_offset > 0;
+    let has_more_below = {
+        // Calculate total lines needed for agents from scroll_offset onwards
+        let remaining_agents = agents.len().saturating_sub(scroll_offset);
+        let lines_for_remaining = remaining_agents * LINES_PER_AGENT;
+        // Account for scroll indicator line at top if needed
+        let available = if has_more_above {
+            visible_lines.saturating_sub(1)
+        } else {
+            visible_lines
+        };
+        lines_for_remaining > available
+    };
+
     let mut lines: Vec<Line> = Vec::new();
 
-    for (i, agent) in agents.iter().enumerate() {
+    // Add "more above" indicator if needed
+    if has_more_above {
+        let indicator = format!("  ▲ {} more above", scroll_offset);
+        lines.push(Line::from(Span::styled(
+            indicator,
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    // Calculate available lines for agent entries
+    let available_lines = visible_lines
+        .saturating_sub(if has_more_above { 1 } else { 0 })
+        .saturating_sub(if has_more_below { 1 } else { 0 });
+
+    // Render visible agents
+    let mut lines_used = 0;
+    let mut agents_displayed = 0;
+    for (i, agent) in agents.iter().enumerate().skip(scroll_offset) {
+        // Check if we have room for this agent (need LINES_PER_AGENT - 1 for last agent, full for others)
+        let lines_needed = if i < agents.len() - 1 {
+            LINES_PER_AGENT
+        } else {
+            LINES_PER_AGENT - 1 // Last agent doesn't need trailing blank line
+        };
+
+        if lines_used + lines_needed > available_lines {
+            break;
+        }
+
+        agents_displayed += 1;
+
         let is_selected = i == selected_index;
 
         // Line 1: Arrow + Name
@@ -118,6 +187,7 @@ fn render_agent_list(frame: &mut Frame, area: Rect, agents: &[Agent], selected_i
                 Span::styled(&agent.name, name_style),
             ]));
         }
+        lines_used += 1;
 
         // Line 2: Status
         let status_text = format!("  {}", agent.status);
@@ -133,6 +203,7 @@ fn render_agent_list(frame: &mut Frame, area: Rect, agents: &[Agent], selected_i
         } else {
             lines.push(Line::from(Span::styled(status_text, status_style)));
         }
+        lines_used += 1;
 
         // Line 3: Uptime or PID
         let info_text = if agent.status == AgentStatus::Running {
@@ -155,6 +226,7 @@ fn render_agent_list(frame: &mut Frame, area: Rect, agents: &[Agent], selected_i
         } else {
             lines.push(Line::from(Span::styled(info_text, info_style)));
         }
+        lines_used += 1;
 
         // Line 4: Type indicator or iteration count
         let type_text = match agent.agent_type {
@@ -172,6 +244,7 @@ fn render_agent_list(frame: &mut Frame, area: Rect, agents: &[Agent], selected_i
         } else {
             lines.push(Line::from(Span::styled(type_text, type_style)));
         }
+        lines_used += 1;
 
         // Line 5: Working directory (the target repo)
         if let Some(ref working_dir) = agent.working_dir {
@@ -195,11 +268,27 @@ fn render_agent_list(frame: &mut Frame, area: Rect, agents: &[Agent], selected_i
             } else {
                 lines.push(Line::from(Span::styled(path_text, path_style)));
             }
+            lines_used += 1;
         }
 
-        // Blank line between agents
-        if i < agents.len() - 1 {
+        // Blank line between agents (if not last visible agent)
+        if i < agents.len() - 1 && lines_used < available_lines {
             lines.push(Line::from(""));
+            lines_used += 1;
+        }
+    }
+
+    // Add "more below" indicator if needed
+    if has_more_below {
+        let hidden_count = agents
+            .len()
+            .saturating_sub(scroll_offset + agents_displayed);
+        if hidden_count > 0 {
+            let indicator = format!("  ▼ {} more below", hidden_count);
+            lines.push(Line::from(Span::styled(
+                indicator,
+                Style::default().fg(Color::DarkGray),
+            )));
         }
     }
 

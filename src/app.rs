@@ -23,6 +23,9 @@ pub enum InputMode {
 
 const OUTPUT_CHANNEL_SIZE: usize = 1000;
 
+/// Lines per agent entry in the list (name, status, info, type, path + separator)
+pub const LINES_PER_AGENT: usize = 6;
+
 /// Main application state
 pub struct App {
     pub agents: Vec<Agent>,
@@ -44,6 +47,8 @@ pub struct App {
     pub status_message: Option<String>,
     pub show_help: bool,
     pub show_delete_confirm: bool,
+    /// Scroll offset for agent list (in number of agents)
+    pub list_scroll_offset: usize,
 }
 
 impl App {
@@ -67,6 +72,7 @@ impl App {
             status_message: None,
             show_help: false,
             show_delete_confirm: false,
+            list_scroll_offset: 0,
         }
     }
 
@@ -86,6 +92,38 @@ impl App {
         } else {
             self.selected_index -= 1;
         }
+    }
+
+    /// Ensures the selected agent is visible in the list by adjusting scroll offset.
+    /// Call this after changing selected_index with the visible height in lines.
+    pub fn ensure_selected_visible(&mut self, visible_lines: usize) {
+        if self.agents.is_empty() {
+            self.list_scroll_offset = 0;
+            return;
+        }
+
+        // Calculate how many complete agents fit in the visible area
+        // Reserve 1 line for potential scroll indicator at top, 1 at bottom
+        let usable_lines = visible_lines.saturating_sub(2);
+        let visible_agents = if usable_lines >= LINES_PER_AGENT {
+            usable_lines / LINES_PER_AGENT
+        } else {
+            1 // At minimum show 1 agent
+        };
+
+        // If selected is before the visible window, scroll up
+        if self.selected_index < self.list_scroll_offset {
+            self.list_scroll_offset = self.selected_index;
+        }
+
+        // If selected is after the visible window, scroll down
+        if self.selected_index >= self.list_scroll_offset + visible_agents {
+            self.list_scroll_offset = self.selected_index.saturating_sub(visible_agents - 1);
+        }
+
+        // Clamp scroll offset to valid range
+        let max_scroll = self.agents.len().saturating_sub(visible_agents);
+        self.list_scroll_offset = self.list_scroll_offset.min(max_scroll);
     }
 
     pub fn selected_agent(&self) -> Option<&Agent> {
