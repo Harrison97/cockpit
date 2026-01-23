@@ -99,6 +99,8 @@ impl AgentStatus {
 /// Terminal size for the embedded terminal
 pub const TERM_COLS: u16 = 180;
 pub const TERM_ROWS: u16 = 40;
+/// Scrollback buffer size in lines (~100K lines for unlimited history)
+pub const SCROLLBACK_SIZE: usize = 100_000;
 
 /// Filter out mouse escape sequences that may leak from PTY
 /// Handles multiple mouse protocols:
@@ -185,7 +187,11 @@ impl Agent {
             name: name.to_string(),
             status: AgentStatus::Stopped,
             start_time: None,
-            terminal: Arc::new(Mutex::new(vt100::Parser::new(TERM_ROWS, TERM_COLS, 1000))),
+            terminal: Arc::new(Mutex::new(vt100::Parser::new(
+                TERM_ROWS,
+                TERM_COLS,
+                SCROLLBACK_SIZE,
+            ))),
             iteration: 0,
             project_path: None,
             working_dir: None,
@@ -207,7 +213,11 @@ impl Agent {
             name: name.to_string(),
             status: AgentStatus::Stopped,
             start_time: None,
-            terminal: Arc::new(Mutex::new(vt100::Parser::new(TERM_ROWS, TERM_COLS, 1000))),
+            terminal: Arc::new(Mutex::new(vt100::Parser::new(
+                TERM_ROWS,
+                TERM_COLS,
+                SCROLLBACK_SIZE,
+            ))),
             iteration: 0,
             project_path: Some(project_path),
             working_dir: Some(working_dir),
@@ -361,7 +371,7 @@ impl Agent {
     /// Reset the terminal parser to a fresh state with the current size
     pub fn reset_terminal(&mut self) {
         let (rows, cols) = self.last_size;
-        self.terminal = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 1000)));
+        self.terminal = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK_SIZE)));
         self.scroll_offset = 0;
     }
 

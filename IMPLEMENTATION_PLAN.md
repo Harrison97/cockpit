@@ -286,7 +286,7 @@
 
 ## Phase 13: Unlimited Scrollback History
 
-- [ ] **13.1 Increase vt100 scrollback buffer**
+- [x] **13.1 Increase vt100 scrollback buffer**
   - Change from 1000 to 100000 lines in vt100::Parser::new()
   - Test memory usage with large buffers
   - This gives us ~100K lines in-memory
