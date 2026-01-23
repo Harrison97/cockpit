@@ -86,22 +86,22 @@
 
 ## Phase 4: Pause/Resume with Signals
 
-- [ ] **4.1 Spawn with process groups**
+- [x] **4.1 Spawn with process groups**
   - Use `Command::process_group(0)` or pre_exec with setsid
   - Store process group ID
   - Signals will target entire group
 
-- [ ] **4.2 Implement pause**
+- [x] **4.2 Implement pause**
   - Method: `pause(&mut self) -> Result<()>`
   - Send SIGSTOP to process group
   - Update status to Paused
 
-- [ ] **4.3 Implement resume**
+- [x] **4.3 Implement resume**
   - Method: `resume(&mut self) -> Result<()>`
   - Send SIGCONT to process group
   - Update status to Running
 
-- [ ] **4.4 Wire up keybindings**
+- [x] **4.4 Wire up keybindings**
   - `p` calls ralph_loop.pause() then updates agent status
   - `r` calls ralph_loop.resume() then updates agent status
   - Handle errors gracefully

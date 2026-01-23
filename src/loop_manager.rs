@@ -155,6 +155,38 @@ impl RalphLoop {
         Ok(())
     }
 
+    /// Pause the ralph loop subprocess.
+    ///
+    /// Sends SIGSTOP to the process group, freezing all processes (bash and claude).
+    pub fn pause(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let pgid = match self.pgid {
+            Some(pgid) => pgid,
+            None => return Err("Loop is not running".into()),
+        };
+
+        // Send SIGSTOP to the entire process group (negative PID targets the group)
+        kill(Pid::from_raw(-pgid), Signal::SIGSTOP)
+            .map_err(|e| format!("Failed to pause process group: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Resume a paused ralph loop subprocess.
+    ///
+    /// Sends SIGCONT to the process group, allowing processes to continue.
+    pub fn resume(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let pgid = match self.pgid {
+            Some(pgid) => pgid,
+            None => return Err("Loop is not running".into()),
+        };
+
+        // Send SIGCONT to the entire process group (negative PID targets the group)
+        kill(Pid::from_raw(-pgid), Signal::SIGCONT)
+            .map_err(|e| format!("Failed to resume process group: {}", e))?;
+
+        Ok(())
+    }
+
     /// Stop the ralph loop subprocess.
     ///
     /// Sends SIGTERM to the process group, waits up to 5 seconds for graceful shutdown,

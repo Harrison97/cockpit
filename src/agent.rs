@@ -135,16 +135,35 @@ impl Agent {
         Ok(())
     }
 
-    /// Pauses the agent, setting status to Paused (keeps start time for uptime tracking)
-    pub fn pause(&mut self) {
+    /// Pauses the agent by sending SIGSTOP to the subprocess.
+    /// Keeps start time for uptime tracking.
+    pub fn pause(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if self.status != AgentStatus::Running {
+            return Err("Agent is not running".into());
+        }
+
+        // Send SIGSTOP to the ralph loop subprocess if we have one
+        if let Some(ref mut ralph_loop) = self.ralph_loop {
+            ralph_loop.pause()?;
+        }
+
         self.status = AgentStatus::Paused;
+        Ok(())
     }
 
-    /// Resumes a paused agent, setting status back to Running
-    pub fn resume(&mut self) {
-        if self.status == AgentStatus::Paused {
-            self.status = AgentStatus::Running;
+    /// Resumes a paused agent by sending SIGCONT to the subprocess.
+    pub fn resume(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if self.status != AgentStatus::Paused {
+            return Err("Agent is not paused".into());
         }
+
+        // Send SIGCONT to the ralph loop subprocess if we have one
+        if let Some(ref mut ralph_loop) = self.ralph_loop {
+            ralph_loop.resume()?;
+        }
+
+        self.status = AgentStatus::Running;
+        Ok(())
     }
 
     /// Returns true if this agent has a real ralph loop configured

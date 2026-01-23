@@ -152,7 +152,10 @@ impl App {
     pub fn pause_selected(&mut self) {
         if let Some(agent) = self.selected_agent_mut() {
             if agent.status == AgentStatus::Running {
-                agent.pause();
+                if let Err(e) = agent.pause() {
+                    // Store error for display (will be implemented later)
+                    eprintln!("Failed to pause agent: {}", e);
+                }
             }
         }
     }
@@ -160,7 +163,12 @@ impl App {
     /// Resumes the currently selected agent (if paused)
     pub fn resume_selected(&mut self) {
         if let Some(agent) = self.selected_agent_mut() {
-            agent.resume();
+            if agent.status == AgentStatus::Paused {
+                if let Err(e) = agent.resume() {
+                    // Store error for display (will be implemented later)
+                    eprintln!("Failed to resume agent: {}", e);
+                }
+            }
         }
     }
 
