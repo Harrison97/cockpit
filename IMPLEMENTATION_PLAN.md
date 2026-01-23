@@ -168,7 +168,7 @@
   - Handle spawn failures gracefully
   - Retry logic for transient failures
 
-- [ ] **8.2 Resource cleanup**
+- [x] **8.2 Resource cleanup**
   - Kill all subprocesses on cockpit exit
   - Clean up zombie processes
   - Save state before exit

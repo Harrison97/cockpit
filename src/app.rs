@@ -165,8 +165,7 @@ impl App {
         if let Some(agent) = self.selected_agent_mut() {
             if agent.status == AgentStatus::Running {
                 if let Err(e) = agent.pause() {
-                    // Store error for display (will be implemented later)
-                    eprintln!("Failed to pause agent: {}", e);
+                    self.status_message = Some(format!("Failed to pause: {}", e));
                 } else {
                     // Save state after status change
                     self.save_state();
@@ -180,8 +179,7 @@ impl App {
         if let Some(agent) = self.selected_agent_mut() {
             if agent.status == AgentStatus::Paused {
                 if let Err(e) = agent.resume() {
-                    // Store error for display (will be implemented later)
-                    eprintln!("Failed to resume agent: {}", e);
+                    self.status_message = Some(format!("Failed to resume: {}", e));
                 } else {
                     // Save state after status change
                     self.save_state();
@@ -195,10 +193,14 @@ impl App {
         let tx = self.output_tx.clone();
         if let Some(agent) = self.selected_agent_mut() {
             if agent.status == AgentStatus::Stopped {
-                // Ignore errors for now - will be properly handled later
-                if agent.start(tx).is_ok() {
-                    // Save state after status change
-                    self.save_state();
+                match agent.start(tx) {
+                    Ok(()) => {
+                        // Save state after status change
+                        self.save_state();
+                    }
+                    Err(e) => {
+                        self.status_message = Some(format!("Failed to start: {}", e));
+                    }
                 }
             }
         }
@@ -766,5 +768,31 @@ impl App {
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl App {
+    /// Performs graceful shutdown of all resources.
+    ///
+    /// This method should be called before the application exits.
+    /// It stops all running subprocesses and saves the current state.
+    ///
+    /// Uses block_in_place to run async stop operations from synchronous context.
+    pub fn shutdown(&mut self) {
+        // Save state first (before stopping agents, to preserve current iteration counts)
+        self.save_state();
+
+        // Stop all agents with running subprocesses
+        tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                for agent in &mut self.agents {
+                    if agent.status != AgentStatus::Stopped {
+                        // Stop the subprocess (this handles SIGTERM -> wait -> SIGKILL if needed)
+                        let _ = agent.stop().await;
+                    }
+                }
+            });
+        });
     }
 }

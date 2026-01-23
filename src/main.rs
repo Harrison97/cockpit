@@ -55,5 +55,8 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
         app.tick();
     }
 
+    // Gracefully shutdown: stop all subprocesses and save state
+    app.shutdown();
+
     Ok(())
 }
