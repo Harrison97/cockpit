@@ -465,7 +465,7 @@ impl Agent {
     /// Find all matches of a search query in the ENTIRE terminal scrollback.
     /// Returns Vec of (absolute_row, column_start, match_length) where absolute_row
     /// is the row from the top of the entire history (0 = oldest line).
-    /// Also returns the max_scrollback value for scroll calculations.
+    /// Also returns the safe_max value for scroll calculations.
     pub fn find_all_matches(&self, query: &str) -> (Vec<(usize, usize, usize)>, usize) {
         if query.is_empty() {
             return (Vec::new(), 0);
@@ -483,23 +483,16 @@ impl Agent {
             let scrollback_max = term.screen().scrollback();
             let safe_max = scrollback_max.min(terminal_height.saturating_sub(1));
 
-            let screen = term.screen();
-            let rows = screen.size().0 as usize;
-            let cols = screen.size().1 as usize;
+            let rows = term.screen().size().0 as usize;
+            let cols = term.screen().size().1 as usize;
 
-            // Search at each scroll position from top (oldest) to bottom (newest)
-            // We iterate from max scroll (oldest visible) down to 0 (newest)
-            for scroll_pos in (0..=safe_max).rev() {
-                term.set_scrollback(scroll_pos);
-                let screen = term.screen();
-
-                for row in 0..rows {
-                    // Calculate absolute row: higher scroll_pos = older content
-                    // At scroll_pos=safe_max, row 0 is the oldest line (absolute 0)
-                    // At scroll_pos=0, row 0 is at absolute position (safe_max)
-                    let absolute_row = safe_max - scroll_pos + row;
-
-                    // Build a vector of (column, char) for this row
+            // Helper to search a single row and add matches
+            let search_row =
+                |term: &vt100::Parser,
+                 row: usize,
+                 absolute_row: usize,
+                 matches: &mut Vec<(usize, usize, usize)>| {
+                    let screen = term.screen();
                     let mut row_chars: Vec<(usize, char)> = Vec::new();
                     for col in 0..cols {
                         if let Some(cell) = screen.cell(row as u16, col as u16) {
@@ -510,7 +503,6 @@ impl Agent {
                         }
                     }
 
-                    // Search for query in this row's characters
                     let row_chars_lower: Vec<char> = row_chars
                         .iter()
                         .map(|(_, c)| c.to_lowercase().next().unwrap_or(*c))
@@ -531,21 +523,32 @@ impl Agent {
 
                         if found {
                             let col = row_chars[start_idx].0;
-                            // Only add if we haven't already found this match
-                            // (avoid duplicates from overlapping scroll windows)
-                            if matches
-                                .last()
-                                .is_none_or(|&(r, c, _)| r != absolute_row || c != col)
-                            {
-                                matches.push((absolute_row, col, query.len()));
-                            }
+                            matches.push((absolute_row, col, query.len()));
                         }
                     }
-                }
+                };
+
+            // Search at max scroll (oldest content): absolute rows 0 to rows-1
+            term.set_scrollback(safe_max);
+            for row in 0..rows {
+                let absolute_row = row;
+                search_row(&term, row, absolute_row, &mut matches);
             }
 
-            // Reset scrollback
+            // Search at scroll 0 (newest content): absolute rows safe_max to safe_max+rows-1
+            // Skip row 0 at this position since it overlaps with row (rows-1) at max scroll
+            // when safe_max == rows-1 (which is always true due to clamping)
             term.set_scrollback(0);
+            for row in 1..rows {
+                let absolute_row = safe_max + row;
+                search_row(&term, row, absolute_row, &mut matches);
+            }
+
+            // Sort by absolute row, then column
+            matches.sort_by_key(|&(r, c, _)| (r, c));
+
+            // Restore current scroll position
+            term.set_scrollback(self.scroll_offset as usize);
 
             return (matches, safe_max);
         }
@@ -616,7 +619,7 @@ impl Agent {
                 }
             }
 
-            term.set_scrollback(0);
+            // Restore scroll position (already at safe_offset, no change needed)
         }
 
         matches
@@ -633,33 +636,28 @@ impl Agent {
             let safe_max = scrollback_max.min(terminal_height.saturating_sub(1));
 
             // Calculate scroll_offset to center the absolute_row
-            // absolute_row = safe_max - scroll_offset + visible_row
-            // We want visible_row to be around terminal_height/2
+            // visible_row = absolute_row - (safe_max - scroll_offset)
+            // We want visible_row ≈ terminal_height/2
             // So: scroll_offset = safe_max - absolute_row + terminal_height/2
             let center_offset = terminal_height / 2;
-            let target_offset = if absolute_row + center_offset > safe_max {
-                safe_max.saturating_sub(absolute_row + center_offset - safe_max)
-            } else {
-                safe_max
-                    .saturating_sub(absolute_row)
-                    .saturating_sub(center_offset)
-            };
+            let ideal_offset = safe_max as isize - absolute_row as isize + center_offset as isize;
+            let new_offset = ideal_offset.max(0).min(safe_max as isize) as usize;
 
-            // Clamp to valid range
-            let new_offset = target_offset.min(safe_max);
             self.scroll_offset = new_offset as u16;
             term.set_scrollback(new_offset);
         }
     }
 
     /// Get the current scroll state for match position calculations
+    /// Returns (current_scroll_offset, safe_max)
     pub fn get_scroll_state(&self) -> (usize, usize) {
         if let Ok(mut term) = self.terminal.lock() {
             let terminal_height = self.last_size.0 as usize;
             term.set_scrollback(usize::MAX);
             let scrollback_max = term.screen().scrollback();
             let safe_max = scrollback_max.min(terminal_height.saturating_sub(1));
-            term.set_scrollback(0);
+            // Restore the current scroll offset
+            term.set_scrollback(self.scroll_offset as usize);
             return (self.scroll_offset as usize, safe_max);
         }
         (0, 0)
