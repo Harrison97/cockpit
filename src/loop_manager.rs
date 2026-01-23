@@ -41,6 +41,9 @@ pub enum LoopError {
     #[error("Failed to resume: {0}")]
     ResumeFailed(String),
 
+    #[error("Cannot pause Claude instances (only ralph loops can be paused)")]
+    PauseNotSupported,
+
     #[error("Claude CLI not found. Install it with: npm install -g @anthropic-ai/claude-code")]
     ClaudeNotFound,
 

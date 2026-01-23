@@ -218,6 +218,7 @@ impl Agent {
             | LoopError::NotRunning
             | LoopError::ProjectNotFound(_)
             | LoopError::PromptNotFound
+            | LoopError::PauseNotSupported
             | LoopError::ClaudeNotFound
             | LoopError::PauseFailed(_)
             | LoopError::ResumeFailed(_) => false,
@@ -235,7 +236,16 @@ impl Agent {
         Ok(())
     }
 
+    /// Returns true if this agent can be paused (only RalphLoop agents support pause)
+    pub fn can_pause(&self) -> bool {
+        self.agent_type == AgentType::RalphLoop
+    }
+
     pub fn pause(&mut self) -> Result<(), AgentError> {
+        if !self.can_pause() {
+            return Err(AgentError::LoopError(LoopError::PauseNotSupported));
+        }
+
         if self.status != AgentStatus::Running {
             return Err(AgentError::InvalidState("Agent is not running".into()));
         }

@@ -306,9 +306,16 @@ fn render_header(frame: &mut Frame, area: Rect) {
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let keybindings = if app.output_focused {
-        "Type to interact │ Tab: back │ Ctrl+C: interrupt"
+        "Type to interact │ Tab: back │ Ctrl+C: interrupt".to_string()
     } else {
-        "j/k: nav │ Tab: focus │ S: start │ s: stop │ p: pause │ r: resume │ n: new │ i: msg │ d: delete │ ?: help │ q: quit"
+        // Show different hints based on selected agent type
+        let can_pause = app.selected_agent().map(|a| a.can_pause()).unwrap_or(true);
+
+        if can_pause {
+            "j/k: nav │ Tab: focus │ S: start │ s: stop │ p: pause │ r: resume │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
+        } else {
+            "j/k: nav │ Tab: focus │ S: start │ s: stop │ r: resume │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
+        }
     };
 
     // Show status message if available, otherwise show keybindings
@@ -316,7 +323,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(format!(" {} ", msg), Style::default().fg(Color::Yellow))
     } else {
         Span::styled(
-            format!(" {} ", keybindings),
+            format!(" {} ", &keybindings),
             Style::default().fg(Color::DarkGray),
         )
     };
@@ -555,8 +562,8 @@ fn render_help_screen(frame: &mut Frame) {
         )),
         Line::from("  S           Start agent"),
         Line::from("  s           Stop agent"),
-        Line::from("  p           Pause agent (SIGSTOP)"),
-        Line::from("  r           Resume agent (SIGCONT)"),
+        Line::from("  p           Pause agent (ralph loops only)"),
+        Line::from("  r           Resume agent"),
         Line::from("  Ctrl+C      Interrupt Claude (when focused)"),
         Line::from(""),
         Line::from(Span::styled(

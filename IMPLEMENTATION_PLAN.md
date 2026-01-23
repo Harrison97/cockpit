@@ -197,7 +197,7 @@
   - For Claude instances: do NOT auto-restart on idle timeout
   - When process exits naturally, set `running` to false
 
-- [ ] **9.4 Disable pause for Claude instances**
+- [x] **9.4 Disable pause for Claude instances**
   - `Agent::pause()` returns error for ClaudeInstance type
   - Add `Agent::can_pause()` method
   - Update UI to gray out or hide pause option for Claude instances
