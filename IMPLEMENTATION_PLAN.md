@@ -291,7 +291,7 @@
   - Test memory usage with large buffers
   - This gives us ~100K lines in-memory
 
-- [ ] **13.2 Remove artificial scroll limits**
+- [x] **13.2 Remove artificial scroll limits**
   - Remove the `terminal_height - 1` clamp (vt100 bug workaround)
   - Fix the root cause: validate scrollback before each render
   - Allow scrolling through entire scrollback buffer

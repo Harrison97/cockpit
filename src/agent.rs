@@ -277,9 +277,6 @@ impl Agent {
 
             // Adjust scroll_offset to maintain absolute position
             if let Some(old_max) = old_scrollback_max {
-                // vt100 bug workaround: must clamp to terminal height
-                let terminal_height = self.last_size.0 as usize;
-
                 term.set_scrollback(usize::MAX);
                 let new_max = term.screen().scrollback();
                 term.set_scrollback(0);
@@ -287,9 +284,8 @@ impl Agent {
                 let lines_added = new_max.saturating_sub(old_max);
                 let new_offset = self.scroll_offset.saturating_add(lines_added as u16);
 
-                // Clamp to safe max (min of scrollback size and terminal height - 1)
-                let safe_max = new_max.min(terminal_height.saturating_sub(1));
-                self.scroll_offset = new_offset.min(safe_max as u16);
+                // Allow scrolling up to the full scrollback size
+                self.scroll_offset = new_offset.min(new_max as u16);
             }
         }
     }
@@ -297,21 +293,18 @@ impl Agent {
     /// Scroll up by the given number of lines
     pub fn scroll_up(&mut self, lines: u16) {
         if let Ok(mut term) = self.terminal.lock() {
-            // vt100 bug workaround: must clamp to both scrollback size AND terminal height
-            let terminal_height = self.last_size.0 as usize;
-
             // Get max scrollback by setting to max and reading clamped value
             term.set_scrollback(usize::MAX);
             let scrollback_max = term.screen().scrollback();
 
-            // Clamp to both (vt100 visible_rows panics if offset > rows.len())
-            let safe_max = scrollback_max.min(terminal_height.saturating_sub(1));
+            // Allow scrolling up to the full scrollback size
             let new_offset = self
                 .scroll_offset
                 .saturating_add(lines)
-                .min(safe_max as u16);
-            term.set_scrollback(new_offset as usize);
+                .min(scrollback_max as u16);
             self.scroll_offset = new_offset;
+            // Restore scrollback to 0 (rendering will set it appropriately)
+            term.set_scrollback(0);
         }
     }
 
@@ -328,16 +321,14 @@ impl Agent {
     /// Scroll to top of scrollback history
     pub fn scroll_to_top(&mut self) {
         if let Ok(mut term) = self.terminal.lock() {
-            let terminal_height = self.last_size.0 as usize;
-
             // Get max scrollback
             term.set_scrollback(usize::MAX);
             let scrollback_max = term.screen().scrollback();
 
-            // Clamp to safe max (same as scroll_up)
-            let safe_max = scrollback_max.min(terminal_height.saturating_sub(1));
-            self.scroll_offset = safe_max as u16;
-            term.set_scrollback(safe_max);
+            // Allow scrolling to the full scrollback size
+            self.scroll_offset = scrollback_max as u16;
+            // Restore scrollback to 0 (rendering will set it appropriately)
+            term.set_scrollback(0);
         }
     }
 
@@ -537,7 +528,7 @@ impl Agent {
     /// Find all matches of a search query in the ENTIRE terminal scrollback.
     /// Returns Vec of (absolute_row, column_start, match_length) where absolute_row
     /// is the row from the top of the entire history (0 = oldest line).
-    /// Also returns the safe_max value for scroll calculations.
+    /// Also returns the scrollback_max value for scroll calculations.
     pub fn find_all_matches(&self, query: &str) -> (Vec<(usize, usize, usize)>, usize) {
         if query.is_empty() {
             return (Vec::new(), 0);
@@ -553,10 +544,14 @@ impl Agent {
             // Get max scrollback
             term.set_scrollback(usize::MAX);
             let scrollback_max = term.screen().scrollback();
-            let safe_max = scrollback_max.min(terminal_height.saturating_sub(1));
 
             let rows = term.screen().size().0 as usize;
             let cols = term.screen().size().1 as usize;
+
+            // vt100 limitation: set_scrollback(N) can only show up to terminal_height
+            // lines of scrollback at a time. To search the full buffer, we iterate
+            // through it in chunks by setting different scrollback values.
+            let render_max = terminal_height.min(scrollback_max);
 
             // Helper to search a single row and add matches
             let search_row =
@@ -600,29 +595,30 @@ impl Agent {
                     }
                 };
 
-            // Search at max scroll (oldest content): absolute rows 0 to rows-1
-            term.set_scrollback(safe_max);
+            // Search at max render scroll (oldest visible content): absolute rows 0 to rows-1
+            term.set_scrollback(render_max);
             for row in 0..rows {
                 let absolute_row = row;
                 search_row(&term, row, absolute_row, &mut matches);
             }
 
-            // Search at scroll 0 (newest content): absolute rows safe_max to safe_max+rows-1
+            // Search at scroll 0 (newest content): absolute rows render_max to render_max+rows-1
             // Skip row 0 at this position since it overlaps with row (rows-1) at max scroll
-            // when safe_max == rows-1 (which is always true due to clamping)
+            // when render_max < rows (the overlap row)
             term.set_scrollback(0);
-            for row in 1..rows {
-                let absolute_row = safe_max + row;
+            let start_row = if render_max < rows { 1 } else { 0 };
+            for row in start_row..rows {
+                let absolute_row = render_max + row;
                 search_row(&term, row, absolute_row, &mut matches);
             }
 
             // Sort by absolute row, then column
             matches.sort_by_key(|&(r, c, _)| (r, c));
 
-            // Restore current scroll position
-            term.set_scrollback(self.scroll_offset as usize);
+            // Restore scrollback to 0
+            term.set_scrollback(0);
 
-            return (matches, safe_max);
+            return (matches, scrollback_max);
         }
 
         (matches, 0)
@@ -697,32 +693,31 @@ impl Agent {
             // Get max scrollback
             term.set_scrollback(usize::MAX);
             let scrollback_max = term.screen().scrollback();
-            let safe_max = scrollback_max.min(terminal_height.saturating_sub(1));
 
             // Calculate scroll_offset to center the absolute_row
-            // visible_row = absolute_row - (safe_max - scroll_offset)
+            // visible_row = absolute_row - (scrollback_max - scroll_offset)
             // We want visible_row ≈ terminal_height/2
-            // So: scroll_offset = safe_max - absolute_row + terminal_height/2
+            // So: scroll_offset = scrollback_max - absolute_row + terminal_height/2
             let center_offset = terminal_height / 2;
-            let ideal_offset = safe_max as isize - absolute_row as isize + center_offset as isize;
-            let new_offset = ideal_offset.max(0).min(safe_max as isize) as usize;
+            let ideal_offset =
+                scrollback_max as isize - absolute_row as isize + center_offset as isize;
+            let new_offset = ideal_offset.max(0).min(scrollback_max as isize) as usize;
 
             self.scroll_offset = new_offset as u16;
-            term.set_scrollback(new_offset);
+            // Restore scrollback to 0 (rendering will set it appropriately)
+            term.set_scrollback(0);
         }
     }
 
     /// Get the current scroll state for match position calculations
-    /// Returns (current_scroll_offset, safe_max)
+    /// Returns (current_scroll_offset, scrollback_max)
     pub fn get_scroll_state(&self) -> (usize, usize) {
         if let Ok(mut term) = self.terminal.lock() {
-            let terminal_height = self.last_size.0 as usize;
             term.set_scrollback(usize::MAX);
             let scrollback_max = term.screen().scrollback();
-            let safe_max = scrollback_max.min(terminal_height.saturating_sub(1));
-            // Restore the current scroll offset
-            term.set_scrollback(self.scroll_offset as usize);
-            return (self.scroll_offset as usize, safe_max);
+            // Restore scrollback to 0
+            term.set_scrollback(0);
+            return (self.scroll_offset as usize, scrollback_max);
         }
         (0, 0)
     }

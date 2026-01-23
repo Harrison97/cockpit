@@ -459,25 +459,24 @@ fn render_terminal_pane(
 
     // Get the terminal screen from the agent, applying scroll offset
     if let Ok(mut term) = agent.terminal.lock() {
-        // vt100 bug workaround: set_scrollback clamps to scrollback.len(), but
-        // visible_rows() panics if scrollback_offset > rows.len() (terminal height).
-        // We must clamp to BOTH the scrollback size AND the terminal height.
         let terminal_height = terminal_area.height as usize;
 
         // Get max scrollback by setting to max and reading clamped value
         term.set_scrollback(usize::MAX);
         let scrollback_max = term.screen().scrollback();
 
-        // Clamp to both scrollback size and terminal height (vt100 bug workaround)
-        let safe_max = scrollback_max.min(terminal_height.saturating_sub(1));
-        let safe_offset = (scroll_offset as usize).min(safe_max);
+        // vt100 limitation: visible_rows() panics if scrollback_offset > terminal_height.
+        // We validate scroll_offset here before rendering.
+        // The user's scroll_offset can go up to scrollback_max, but for rendering
+        // we must clamp to what vt100 can handle (terminal_height).
+        let render_max = terminal_height.min(scrollback_max);
+        let render_offset = (scroll_offset as usize).min(render_max);
 
-        if safe_offset != scroll_offset as usize {
-            agent.scroll_offset = safe_offset as u16;
-        }
+        // Note: agent.scroll_offset is the logical scroll position (can be > terminal_height)
+        // render_offset is the clamped value safe for vt100 rendering
 
-        // Now set the validated scrollback offset
-        term.set_scrollback(safe_offset);
+        // Set the validated scrollback offset for rendering
+        term.set_scrollback(render_offset);
 
         let screen = term.screen();
         let pseudo_term = PseudoTerminal::new(screen);
