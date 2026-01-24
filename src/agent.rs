@@ -31,8 +31,10 @@ pub enum ProcessState {
     Starting,
     /// Process is ready to receive input
     Ready,
-    /// Process is shutting down
+    /// Process is shutting down (initiated stop)
     Stopping,
+    /// Sent Ctrl+C, waiting for graceful exit (cleanup sequences)
+    Exiting,
     /// Process is not running
     #[default]
     Stopped,
@@ -106,6 +108,8 @@ pub const TERM_ROWS: u16 = 40;
 pub const SCROLLBACK_SIZE: usize = 100_000;
 /// Maximum number of search matches to collect (prevents unbounded memory growth)
 pub const MAX_SEARCH_MATCHES: usize = 10_000;
+/// Maximum raw history size in memory (2MB) - older data is trimmed
+const MAX_RAW_HISTORY_BYTES: usize = 2 * 1024 * 1024;
 
 /// Filter out mouse escape sequences that may leak from PTY
 /// Handles multiple mouse protocols:
@@ -189,6 +193,8 @@ pub struct Agent {
     history_file: Option<File>,
     /// Whether history has been loaded (deferred until first resize for correct sizing)
     history_loaded: bool,
+    /// Raw PTY data kept in memory for instant re-wrapping on resize
+    raw_history: Vec<u8>,
 }
 
 impl Agent {
@@ -212,6 +218,7 @@ impl Agent {
             process_state: ProcessState::Stopped,
             history_file: None,
             history_loaded: true, // No project = no history to load
+            raw_history: Vec::new(),
         }
     }
 
@@ -246,6 +253,7 @@ impl Agent {
             process_state: ProcessState::Stopped,
             history_file,
             history_loaded: false, // Will load on first resize
+            raw_history: Vec::new(),
         }
     }
 
@@ -276,8 +284,8 @@ impl Agent {
         }
     }
 
-    /// Load recent history from disk into the terminal buffer.
-    /// Reads the last ~1MB of history to avoid loading huge files.
+    /// Load recent history from disk into raw_history buffer and render at current width.
+    /// Reads the last ~2MB of history to avoid loading huge files.
     /// Called lazily on first resize to ensure correct terminal size.
     fn load_history(&mut self) {
         if self.history_loaded {
@@ -294,9 +302,6 @@ impl Agent {
             return;
         }
 
-        // Read the history file, limiting to last ~1MB for performance
-        const MAX_HISTORY_BYTES: u64 = 1024 * 1024; // 1MB
-
         let file = match File::open(&path) {
             Ok(f) => f,
             Err(_) => return,
@@ -305,12 +310,12 @@ impl Agent {
         let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
         let mut reader = BufReader::new(file);
 
-        // If file is larger than limit, seek to the last MAX_HISTORY_BYTES
-        let data = if file_size > MAX_HISTORY_BYTES {
+        // If file is larger than limit, seek to the last MAX_RAW_HISTORY_BYTES
+        let data = if file_size > MAX_RAW_HISTORY_BYTES as u64 {
             use std::io::Seek;
             let mut reader = reader.into_inner();
-            let _ = reader.seek(std::io::SeekFrom::End(-(MAX_HISTORY_BYTES as i64)));
-            let mut buf = Vec::with_capacity(MAX_HISTORY_BYTES as usize);
+            let _ = reader.seek(std::io::SeekFrom::End(-(MAX_RAW_HISTORY_BYTES as i64)));
+            let mut buf = Vec::with_capacity(MAX_RAW_HISTORY_BYTES);
             let _ = reader.read_to_end(&mut buf);
             buf
         } else {
@@ -319,9 +324,26 @@ impl Agent {
             buf
         };
 
-        // Feed the data into the terminal parser (already at correct size from resize)
+        // Filter mouse sequences and store in raw_history
+        let filtered = filter_mouse_sequences(&data);
+        self.raw_history = filtered;
+
+        // Render at current terminal size
+        self.rerender_from_raw();
+    }
+
+    /// Re-render the terminal from raw_history at the current size.
+    /// Called on width changes to properly wrap/unwrap content.
+    fn rerender_from_raw(&mut self) {
+        let (rows, cols) = self.last_size;
+
+        // Build new terminal OUTSIDE the lock so old content stays visible during processing
+        let mut new_term = vt100::Parser::new(rows, cols, SCROLLBACK_SIZE);
+        new_term.process(&self.raw_history);
+
+        // Quick swap - only hold lock briefly
         if let Ok(mut term) = self.terminal.lock() {
-            term.process(&data);
+            *term = new_term;
         }
     }
 
@@ -334,9 +356,29 @@ impl Agent {
 
     /// Marker sent by loop_manager when a new Claude iteration is about to start
     const STARTING_MARKER: &'static [u8] = b"[Starting...]";
+    /// Marker sent by loop_manager when graceful shutdown begins
+    const EXITING_MARKER: &'static [u8] = b"[Exiting...]";
+    /// Characters that indicate Claude Code is ready for input
+    /// The ❯ prompt character or the banner text
+    const READY_INDICATORS: &'static [&'static [u8]] = &[
+        "❯".as_bytes(),      // Claude's prompt character
+        b"Claude Code",      // Banner text
+        b"claude-code",      // Alternative banner
+    ];
 
     /// Process raw terminal data from the PTY
     pub fn process_terminal_data(&mut self, data: &[u8]) {
+        // Check for exiting marker (graceful shutdown in progress)
+        let contains_exiting_marker = data
+            .windows(Self::EXITING_MARKER.len())
+            .any(|w| w == Self::EXITING_MARKER);
+
+        if contains_exiting_marker {
+            self.process_state = ProcessState::Exiting;
+            // Don't write the marker to history or terminal - it's internal
+            return;
+        }
+
         // Check for restart transition marker from ralph loop
         // When detected, set Starting state to block input until new Claude instance is ready
         let contains_starting_marker = data
@@ -347,9 +389,14 @@ impl Agent {
             self.process_state = ProcessState::Starting;
             // Don't transition to Ready yet - the starting marker itself doesn't count
             // as real Claude output. Wait for actual output from the new instance.
-        } else {
-            // Transition from Starting to Ready when first real output is received
-            if self.process_state == ProcessState::Starting && !data.is_empty() {
+        } else if self.process_state == ProcessState::Starting {
+            // Only transition to Ready when we see actual Claude Code output,
+            // not just bash startup noise or terminal control sequences.
+            // Look for Claude's prompt character or banner text.
+            let contains_ready_indicator = Self::READY_INDICATORS
+                .iter()
+                .any(|indicator| data.windows(indicator.len()).any(|w| w == *indicator));
+            if contains_ready_indicator {
                 self.process_state = ProcessState::Ready;
             }
         }
@@ -363,6 +410,14 @@ impl Agent {
 
         // Filter out mouse escape sequences that may leak from PTY
         let filtered = filter_mouse_sequences(data);
+
+        // Store filtered data in raw_history for instant re-wrapping on resize
+        self.raw_history.extend_from_slice(&filtered);
+        // Trim if exceeding max size (keep the most recent data)
+        if self.raw_history.len() > MAX_RAW_HISTORY_BYTES {
+            let trim_at = self.raw_history.len() - MAX_RAW_HISTORY_BYTES;
+            self.raw_history.drain(0..trim_at);
+        }
 
         if let Ok(mut term) = self.terminal.lock() {
             // If scrolled up, track how many new lines are added to maintain position
@@ -442,18 +497,36 @@ impl Agent {
 
     /// Resize the terminal to the given dimensions (only if size changed)
     pub fn resize(&mut self, rows: u16, cols: u16) {
-        let size_changed = self.last_size != (rows, cols);
+        let (old_rows, old_cols) = self.last_size;
+        let size_changed = (old_rows, old_cols) != (rows, cols);
+        let width_changed = cols != old_cols;
 
         if size_changed {
             self.last_size = (rows, cols);
 
-            // Reset scroll before resize to avoid stale offset issues
-            self.scroll_offset = 0;
+            // Only reset scroll on width change (vertical resize should maintain position)
+            if width_changed {
+                self.scroll_offset = 0;
+            }
 
-            // Resize the vt100 parser
-            if let Ok(mut term) = self.terminal.lock() {
-                term.set_scrollback(0);
-                term.set_size(rows, cols);
+            // Width change: re-render content for proper wrapping
+            // Height-only change: just resize vt100 parser (no content re-render)
+            if width_changed && self.history_loaded && !self.raw_history.is_empty() {
+                const RECENT_BYTES: usize = 10 * 1024;
+                let start = self.raw_history.len().saturating_sub(RECENT_BYTES);
+                let recent = &self.raw_history[start..];
+
+                let mut new_term = vt100::Parser::new(rows, cols, SCROLLBACK_SIZE);
+                new_term.process(recent);
+
+                if let Ok(mut term) = self.terminal.lock() {
+                    *term = new_term;
+                }
+            } else {
+                // Height-only or no history: just resize the parser
+                if let Ok(mut term) = self.terminal.lock() {
+                    term.set_size(rows, cols);
+                }
             }
 
             // Resize the PTY
@@ -568,19 +641,19 @@ impl Agent {
         }
     }
 
-    pub async fn stop(&mut self) -> Result<(), AgentError> {
+    /// Stop the agent. Returns immediately; cleanup happens in the background.
+    pub fn stop(&mut self) {
         // Set process state to Stopping during shutdown
         self.process_state = ProcessState::Stopping;
 
         if let Some(ref mut ralph_loop) = self.ralph_loop {
-            let _ = ralph_loop.stop().await;
+            ralph_loop.stop();
         }
         self.ralph_loop = None;
 
         self.status = AgentStatus::Stopped;
         self.start_time = None;
         self.process_state = ProcessState::Stopped;
-        Ok(())
     }
 
     /// Returns true if this agent can be paused (only RalphLoop agents support pause)
@@ -849,5 +922,119 @@ impl Agent {
             return (self.scroll_offset as usize, scrollback_max);
         }
         (0, 0)
+    }
+
+    /// Convert a visible row index to absolute row in history
+    /// visible_row is 0-indexed from top of visible area
+    pub fn visible_row_to_absolute(&self, visible_row: usize) -> usize {
+        if let Ok(mut term) = self.terminal.lock() {
+            term.set_scrollback(usize::MAX);
+            let scrollback_max = term.screen().scrollback();
+            term.set_scrollback(0);
+
+            let scroll_offset = self.scroll_offset as usize;
+
+            // When scrolled: visible row 0 is at (scrollback_max - scroll_offset)
+            // When at bottom (scroll_offset=0): visible row 0 is at scrollback_max
+            let base_row = scrollback_max.saturating_sub(scroll_offset);
+            return base_row + visible_row;
+        }
+        visible_row
+    }
+
+    /// Convert absolute row to visible row (if visible)
+    /// Returns None if the row is not currently visible
+    pub fn absolute_row_to_visible(&self, absolute_row: usize) -> Option<usize> {
+        if let Ok(mut term) = self.terminal.lock() {
+            term.set_scrollback(usize::MAX);
+            let scrollback_max = term.screen().scrollback();
+            term.set_scrollback(0);
+
+            let terminal_height = self.last_size.0 as usize;
+            let scroll_offset = self.scroll_offset as usize;
+
+            let base_row = scrollback_max.saturating_sub(scroll_offset);
+            let end_row = base_row + terminal_height;
+
+            if absolute_row >= base_row && absolute_row < end_row {
+                return Some(absolute_row - base_row);
+            }
+        }
+        None
+    }
+
+    /// Extract text from terminal between two absolute positions
+    /// Returns the text content including newlines for multi-line selections
+    pub fn extract_text_range(
+        &self,
+        start_row: usize,
+        start_col: usize,
+        end_row: usize,
+        end_col: usize,
+    ) -> String {
+        let mut result = String::new();
+
+        if let Ok(mut term) = self.terminal.lock() {
+            let screen = term.screen();
+            let cols = screen.size().1 as usize;
+
+            // We need to iterate through the terminal content
+            // For each row in range, extract text from cells
+            for row in start_row..=end_row {
+                // Determine column range for this row
+                let col_start = if row == start_row { start_col } else { 0 };
+                let col_end = if row == end_row {
+                    end_col + 1
+                } else {
+                    cols
+                };
+
+                // We need to access the row at the correct scroll position
+                // Set scrollback to position this row as visible
+                term.set_scrollback(usize::MAX);
+                let scrollback_max = term.screen().scrollback();
+
+                // Calculate scroll offset to make this row visible
+                // row is absolute, we need it to be in the visible window
+                let target_scroll = scrollback_max.saturating_sub(row);
+                term.set_scrollback(target_scroll.min(scrollback_max));
+
+                // Now calculate which visible row this maps to
+                let visible_row = if target_scroll > 0 {
+                    0 // Row is at top when we scroll to it
+                } else {
+                    row.saturating_sub(scrollback_max)
+                };
+
+                // Extract text from this row
+                let mut row_text = String::new();
+                for col in col_start..col_end.min(cols) {
+                    if let Some(cell) = term.screen().cell(visible_row as u16, col as u16) {
+                        let contents = cell.contents();
+                        if contents.is_empty() {
+                            row_text.push(' ');
+                        } else {
+                            row_text.push_str(&contents);
+                        }
+                    } else {
+                        row_text.push(' ');
+                    }
+                }
+
+                // Trim trailing spaces from the row (but preserve intentional spaces)
+                let trimmed = row_text.trim_end();
+                result.push_str(trimmed);
+
+                // Add newline between rows (not after last row)
+                if row < end_row {
+                    result.push('\n');
+                }
+            }
+
+            // Restore scrollback to 0
+            term.set_scrollback(0);
+        }
+
+        result
     }
 }

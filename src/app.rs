@@ -72,6 +72,16 @@ pub struct App {
     search_max_scrollback: usize,
     /// Index of the currently highlighted match in search_matches_absolute
     pub search_current: usize,
+    /// Terminal text selection start position (absolute_row, col)
+    pub selection_start: Option<(usize, usize)>,
+    /// Terminal text selection end position (absolute_row, col)
+    pub selection_end: Option<(usize, usize)>,
+    /// Whether user is currently dragging to select
+    pub is_selecting: bool,
+    /// Cached terminal area for coordinate translation
+    pub terminal_area: Option<(u16, u16, u16, u16)>, // x, y, width, height
+    /// Last known terminal width for detecting width changes that invalidate selection
+    last_terminal_width: Option<u16>,
 }
 
 impl App {
@@ -101,6 +111,11 @@ impl App {
             search_matches_absolute: Vec::new(),
             search_max_scrollback: 0,
             search_current: 0,
+            selection_start: None,
+            selection_end: None,
+            is_selecting: false,
+            terminal_area: None,
+            last_terminal_width: None,
         }
     }
 
@@ -231,10 +246,7 @@ impl App {
     pub fn stop_selected(&mut self) {
         if let Some(agent) = self.selected_agent_mut() {
             if agent.status != AgentStatus::Stopped {
-                tokio::task::block_in_place(|| {
-                    let rt = tokio::runtime::Handle::current();
-                    let _ = rt.block_on(agent.stop());
-                });
+                agent.stop();
             }
         }
         self.save_state();
@@ -247,10 +259,7 @@ impl App {
 
         if let Some(agent) = self.selected_agent_mut() {
             if agent.status != AgentStatus::Stopped {
-                tokio::task::block_in_place(|| {
-                    let rt = tokio::runtime::Handle::current();
-                    let _ = rt.block_on(agent.stop());
-                });
+                agent.stop();
             }
         }
 
@@ -321,6 +330,122 @@ impl App {
         if let Some(agent) = self.selected_agent_mut() {
             agent.scroll_to_bottom();
         }
+    }
+
+    /// Start a text selection at the given screen coordinates
+    pub fn start_selection(&mut self, screen_col: u16, screen_row: u16) {
+        if let Some((term_x, term_y, term_w, term_h)) = self.terminal_area {
+            // Check if click is within terminal area
+            if screen_col >= term_x
+                && screen_col < term_x + term_w
+                && screen_row >= term_y
+                && screen_row < term_y + term_h
+            {
+                let rel_col = (screen_col - term_x) as usize;
+                let rel_row = (screen_row - term_y) as usize;
+
+                // Convert to absolute position (accounting for scroll)
+                if let Some(agent) = self.selected_agent() {
+                    let abs_row = agent.visible_row_to_absolute(rel_row);
+                    self.selection_start = Some((abs_row, rel_col));
+                    self.selection_end = Some((abs_row, rel_col));
+                    self.is_selecting = true;
+                }
+            }
+        }
+    }
+
+    /// Update selection end point during drag
+    pub fn update_selection(&mut self, screen_col: u16, screen_row: u16) {
+        if !self.is_selecting {
+            return;
+        }
+        if let Some((term_x, term_y, term_w, term_h)) = self.terminal_area {
+            // Clamp to terminal area
+            let clamped_col = screen_col.max(term_x).min(term_x + term_w - 1);
+            let clamped_row = screen_row.max(term_y).min(term_y + term_h - 1);
+
+            let rel_col = (clamped_col - term_x) as usize;
+            let rel_row = (clamped_row - term_y) as usize;
+
+            if let Some(agent) = self.selected_agent() {
+                let abs_row = agent.visible_row_to_absolute(rel_row);
+                self.selection_end = Some((abs_row, rel_col));
+            }
+        }
+    }
+
+    /// End the selection (mouse released)
+    pub fn end_selection(&mut self) {
+        self.is_selecting = false;
+    }
+
+    /// Clear the current selection
+    pub fn clear_selection(&mut self) {
+        self.selection_start = None;
+        self.selection_end = None;
+        self.is_selecting = false;
+    }
+
+    /// Called when terminal is resized. Clears selection if width changed
+    /// (because selection coordinates become invalid when content re-wraps).
+    pub fn on_terminal_resize(&mut self, new_width: u16) {
+        if let Some(old_width) = self.last_terminal_width {
+            if old_width != new_width {
+                // Width changed, selection coordinates are now invalid
+                self.clear_selection();
+            }
+        }
+        self.last_terminal_width = Some(new_width);
+    }
+
+    /// Check if there's an active selection
+    pub fn has_selection(&self) -> bool {
+        self.selection_start.is_some() && self.selection_end.is_some()
+    }
+
+    /// Get the normalized selection range (start <= end)
+    pub fn get_selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
+        match (self.selection_start, self.selection_end) {
+            (Some(start), Some(end)) => {
+                // Normalize so start <= end
+                if start.0 < end.0 || (start.0 == end.0 && start.1 <= end.1) {
+                    Some((start, end))
+                } else {
+                    Some((end, start))
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Copy the selected text to clipboard
+    pub fn copy_selection(&mut self) {
+        if let Some(((start_row, start_col), (end_row, end_col))) = self.get_selection_range() {
+            if let Some(agent) = self.selected_agent() {
+                let text = agent.extract_text_range(start_row, start_col, end_row, end_col);
+                if !text.is_empty() {
+                    match arboard::Clipboard::new() {
+                        Ok(mut clipboard) => {
+                            if let Err(e) = clipboard.set_text(&text) {
+                                self.status_message = Some(format!("Failed to copy: {}", e));
+                            } else {
+                                let line_count = text.lines().count();
+                                let char_count = text.chars().count();
+                                self.status_message = Some(format!(
+                                    "Copied {} chars ({} lines)",
+                                    char_count, line_count
+                                ));
+                            }
+                        }
+                        Err(e) => {
+                            self.status_message = Some(format!("Clipboard error: {}", e));
+                        }
+                    }
+                }
+            }
+        }
+        self.clear_selection();
     }
 
     /// Jump to the next search match and scroll to center it
@@ -767,6 +892,13 @@ impl App {
                 return true;
             }
 
+            // 'y' copies selection (vim yank style)
+            if code == KeyCode::Char('y') && modifiers.is_empty() && self.has_selection() {
+                self.copy_selection();
+                self.clear_selection();
+                return true;
+            }
+
             // Shift+Arrow for scrolling (works regardless of agent status)
             if modifiers.contains(KeyModifiers::SHIFT) {
                 match code {
@@ -794,8 +926,9 @@ impl App {
                 }
             }
 
-            // Esc also unfocuses
+            // Esc clears selection and unfocuses
             if code == KeyCode::Esc {
+                self.clear_selection();
                 self.unfocus_output();
                 return true;
             }
@@ -1088,16 +1221,11 @@ impl App {
     pub fn shutdown(&mut self) {
         self.save_state();
 
-        tokio::task::block_in_place(|| {
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(async {
-                for agent in &mut self.agents {
-                    if agent.status != AgentStatus::Stopped {
-                        let _ = agent.stop().await;
-                    }
-                }
-            });
-        });
+        for agent in &mut self.agents {
+            if agent.status != AgentStatus::Stopped {
+                agent.stop();
+            }
+        }
     }
 }
 

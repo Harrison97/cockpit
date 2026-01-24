@@ -24,6 +24,12 @@ pub struct SearchState {
     pub total_matches: usize,
 }
 
+/// Selection state passed to terminal rendering
+pub struct SelectionState {
+    pub start: Option<(usize, usize)>,
+    pub end: Option<(usize, usize)>,
+}
+
 fn create_main_layout(area: Rect) -> (Rect, Rect, Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -73,6 +79,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         block.inner(output_pane_area)
     };
 
+    // Check for terminal width changes and clear selection if needed
+    // (selection coordinates become invalid when content re-wraps)
+    app.on_terminal_resize(terminal_inner.width);
+
     // Resize selected agent's terminal to match display area
     if let Some(agent) = app.selected_agent_mut() {
         agent.resize(terminal_inner.height, terminal_inner.width);
@@ -95,13 +105,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         query_len: app.search_query().map(|q| q.len()).unwrap_or(0),
         total_matches: app.search_matches_absolute_count(),
     };
-    render_terminal_pane(
+    let selection_state = SelectionState {
+        start: app.selection_start,
+        end: app.selection_end,
+    };
+    let terminal_area = render_terminal_pane(
         frame,
         output_pane_area,
         app.selected_agent_mut(),
         output_focused,
         &search_state,
+        &selection_state,
     );
+    // Store terminal area for mouse coordinate translation
+    app.terminal_area = terminal_area;
     render_footer(frame, footer_area, app);
 
     // Render input box if in input mode
@@ -335,7 +352,8 @@ fn render_terminal_pane(
     agent: Option<&mut Agent>,
     output_focused: bool,
     search: &SearchState,
-) {
+    selection: &SelectionState,
+) -> Option<(u16, u16, u16, u16)> {
     let is_searching = !matches!(search.mode, SearchMode::Off);
 
     // Build title - need to access terminal to get scrollback info
@@ -358,6 +376,7 @@ fn render_terminal_pane(
             let process_state_hint = match a.process_state {
                 ProcessState::Starting => " [Starting...]",
                 ProcessState::Stopping => " [Stopping...]",
+                ProcessState::Exiting => " [Exiting...]",
                 _ => "",
             };
 
@@ -432,7 +451,7 @@ fn render_terminal_pane(
             let msg =
                 Paragraph::new("No agent selected").style(Style::default().fg(Color::DarkGray));
             frame.render_widget(msg, inner_area);
-            return;
+            return None;
         }
     };
 
@@ -507,10 +526,93 @@ fn render_terminal_pane(
                 }
             }
         }
-    } else {
-        let msg = Paragraph::new("Terminal unavailable").style(Style::default().fg(Color::Red));
-        frame.render_widget(msg, terminal_area);
+
+        // Apply selection highlighting
+        if let (Some((start_row, start_col)), Some((end_row, end_col))) =
+            (selection.start, selection.end)
+        {
+            // Normalize selection (start <= end)
+            let ((sel_start_row, sel_start_col), (sel_end_row, sel_end_col)) =
+                if start_row < end_row || (start_row == end_row && start_col <= end_col) {
+                    ((start_row, start_col), (end_row, end_col))
+                } else {
+                    ((end_row, end_col), (start_row, start_col))
+                };
+
+            // Compute visibility inline (avoid calling agent.absolute_row_to_visible
+            // which would deadlock since we already hold the terminal lock)
+            let base_row = scrollback_max.saturating_sub(scroll_offset as usize);
+            let end_row_visible = base_row + terminal_height;
+
+            let buf = frame.buffer_mut();
+            let cols = terminal_area.width as usize;
+
+            for abs_row in sel_start_row..=sel_end_row {
+                // Check if this row is visible (inline visibility check)
+                if abs_row >= base_row && abs_row < end_row_visible {
+                    let vis_row = abs_row - base_row;
+                    let screen_y = terminal_area.y + vis_row as u16;
+
+                    // Determine column range for this row
+                    let col_start = if abs_row == sel_start_row {
+                        sel_start_col
+                    } else {
+                        0
+                    };
+                    let col_end = if abs_row == sel_end_row {
+                        sel_end_col + 1
+                    } else {
+                        cols
+                    };
+
+                    for col in col_start..col_end.min(cols) {
+                        let screen_x = terminal_area.x + col as u16;
+
+                        if screen_x < terminal_area.x + terminal_area.width
+                            && screen_y < terminal_area.y + terminal_area.height
+                        {
+                            if let Some(cell) = buf.cell_mut((screen_x, screen_y)) {
+                                // Use inverted colors for selection
+                                let fg = cell.fg;
+                                let bg = cell.bg;
+                                cell.set_fg(bg);
+                                cell.set_bg(if fg == Color::Reset {
+                                    Color::White
+                                } else {
+                                    fg
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Return terminal area for mouse coordinate translation
+        let result = Some((
+            terminal_area.x,
+            terminal_area.y,
+            terminal_area.width,
+            terminal_area.height,
+        ));
+
+        // Render search box if in search mode
+        if let Some(search_area) = search_area {
+            render_search_box(
+                frame,
+                search_area,
+                &search.mode,
+                search.total_matches,
+                search.current,
+            );
+        }
+
+        return result;
     }
+
+    // No agent case
+    let msg = Paragraph::new("Terminal unavailable").style(Style::default().fg(Color::Red));
+    frame.render_widget(msg, terminal_area);
 
     // Render search box if in search mode
     if let Some(search_area) = search_area {
@@ -522,6 +624,13 @@ fn render_terminal_pane(
             search.current,
         );
     }
+
+    Some((
+        terminal_area.x,
+        terminal_area.y,
+        terminal_area.width,
+        terminal_area.height,
+    ))
 }
 
 /// Renders the search input box at the bottom of the terminal pane

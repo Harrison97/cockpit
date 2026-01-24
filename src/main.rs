@@ -14,9 +14,13 @@ use app::App;
 use crossterm::{
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyEventKind, MouseEventKind,
+        Event, KeyboardEnhancementFlags, KeyEventKind, MouseButton, MouseEventKind,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, BeginSynchronizedUpdate, EndSynchronizedUpdate,
+        EnterAlternateScreen, LeaveAlternateScreen,
+    },
     ExecutableCommand,
 };
 use ratatui::prelude::*;
@@ -26,6 +30,7 @@ static TERMINAL_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 fn cleanup_terminal() {
     if TERMINAL_INITIALIZED.swap(false, Ordering::SeqCst) {
+        let _ = io::stdout().execute(PopKeyboardEnhancementFlags);
         let _ = io::stdout().execute(DisableMouseCapture);
         let _ = io::stdout().execute(DisableBracketedPaste);
         let _ = io::stdout().execute(crossterm::cursor::Show);
@@ -125,6 +130,10 @@ async fn main() -> io::Result<()> {
     io::stdout().execute(crossterm::cursor::Hide)?;
     io::stdout().execute(EnableBracketedPaste)?;
     io::stdout().execute(EnableMouseCapture)?;
+    // Enable keyboard enhancement to detect Cmd key on macOS
+    let _ = io::stdout().execute(PushKeyboardEnhancementFlags(
+        KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES,
+    ));
     TERMINAL_INITIALIZED.store(true, Ordering::SeqCst);
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
 
@@ -148,10 +157,12 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
         // This ensures render sees fresh data
         app.tick();
 
-        // Draw the UI with updated state
+        // Draw the UI with updated state (synchronized to reduce flicker)
+        io::stdout().execute(BeginSynchronizedUpdate)?;
         terminal.draw(|frame| {
             ui::draw(frame, &mut app);
         })?;
+        io::stdout().execute(EndSynchronizedUpdate)?;
 
         // Use adaptive poll rate: 60 FPS when user recently interacted, 10 FPS when idle
         // This reduces CPU usage when just watching terminal output
@@ -180,14 +191,37 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
                     // Handle pasted text (preserves newlines)
                     app.handle_paste(&text);
                 }
+                Event::Resize(_, _) => {
+                    // Terminal handles resize via frame.area() on next draw
+                }
                 Event::Mouse(mouse) => {
-                    // Coalesce scroll events, ignore other mouse events
-                    if app.output_focused {
-                        match mouse.kind {
-                            MouseEventKind::ScrollUp => scroll_delta += 3,
-                            MouseEventKind::ScrollDown => scroll_delta -= 3,
-                            _ => {} // Ignore move, click, drag events
+                    // If Shift is held, let terminal handle native selection (works with Cmd+C)
+                    let shift_held = mouse.modifiers.contains(event::KeyModifiers::SHIFT);
+
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => {
+                            if app.output_focused {
+                                scroll_delta += 3;
+                            }
                         }
+                        MouseEventKind::ScrollDown => {
+                            if app.output_focused {
+                                scroll_delta -= 3;
+                            }
+                        }
+                        MouseEventKind::Down(MouseButton::Left) if !shift_held => {
+                            // Start selection on left click (without shift)
+                            app.start_selection(mouse.column, mouse.row);
+                        }
+                        MouseEventKind::Drag(MouseButton::Left) if !shift_held => {
+                            // Update selection during drag
+                            app.update_selection(mouse.column, mouse.row);
+                        }
+                        MouseEventKind::Up(MouseButton::Left) if !shift_held => {
+                            // End selection on mouse release
+                            app.end_selection();
+                        }
+                        _ => {}
                     }
                 }
                 _ => {}

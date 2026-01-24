@@ -314,6 +314,14 @@ impl RalphLoop {
         is_ralph_loop: bool,
         initial_size: (u16, u16),
     ) {
+        // Send starting marker on initial start (from stopped state)
+        let _ = tx
+            .send(TerminalData::new(
+                agent_name.clone(),
+                b"[Starting...]\r\n".to_vec(),
+            ))
+            .await;
+
         while !cancel_token.is_cancelled() {
             // Wait until not paused before starting a new iteration
             while paused.load(Ordering::SeqCst) && !cancel_token.is_cancelled() {
@@ -458,8 +466,65 @@ impl RalphLoop {
             tokio::select! {
                 // Priority 1: Check for cancellation
                 _ = cancel_token.cancelled() => {
-                    // Clean shutdown: kill child and exit
-                    let _ = child.kill().await;
+                    // Signal that we're in graceful exit phase
+                    let _ = tx.send(TerminalData::new(
+                        agent_name.to_string(),
+                        b"[Exiting...]".to_vec(),
+                    )).await;
+
+                    // Graceful shutdown: send double Ctrl+C to exit Claude Code
+                    // First Ctrl+C cancels current operation, second Ctrl+C exits
+                    let _ = pty_write.write_all(&[0x03]).await;
+                    let _ = pty_write.flush().await;
+
+                    // Wait for Claude to respond before sending second Ctrl+C
+                    // This detects actual processing rather than using a fixed timer
+                    tokio::select! {
+                        biased;
+                        // If we get output, Claude processed the first Ctrl+C
+                        result = pty_read.read(&mut buf) => {
+                            if let Ok(n) = result {
+                                if n > 0 {
+                                    let _ = tx.send(TerminalData::new(
+                                        agent_name.to_string(),
+                                        buf[..n].to_vec(),
+                                    )).await;
+                                }
+                            }
+                        }
+                        // If process exits from first Ctrl+C, we're done
+                        _ = child.wait() => {
+                            break;
+                        }
+                    }
+
+                    // Send second Ctrl+C to exit Claude Code
+                    let _ = pty_write.write_all(&[0x03]).await;
+                    let _ = pty_write.flush().await;
+
+                    // Drain remaining output until process exits
+                    loop {
+                        tokio::select! {
+                            biased;
+                            result = pty_read.read(&mut buf) => {
+                                match result {
+                                    Ok(0) => break, // EOF - process exited
+                                    Ok(n) => {
+                                        let _ = tx.send(TerminalData::new(
+                                            agent_name.to_string(),
+                                            buf[..n].to_vec(),
+                                        )).await;
+                                    }
+                                    Err(_) => break, // PTY closed
+                                }
+                            }
+                            // Safety: if process ignores Ctrl+C, force kill after 5s
+                            _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                                let _ = child.kill().await;
+                                break;
+                            }
+                        }
+                    }
                     break;
                 }
 
@@ -572,7 +637,9 @@ impl RalphLoop {
         Ok(())
     }
 
-    pub async fn stop(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    /// Stop the loop. Returns immediately; cleanup happens in the background.
+    /// The `running` flag will be set to false when the task actually finishes.
+    pub fn stop(&mut self) {
         // Signal cancellation - this immediately unblocks the select! in the task
         self.cancel_token.cancel();
         self.paused.store(false, Ordering::SeqCst);
@@ -580,25 +647,17 @@ impl RalphLoop {
         // Drop the command channel to signal the task
         self.cmd_tx = None;
 
-        // Wait for the task to complete (with timeout for safety)
+        // Spawn a detached cleanup task to wait for the handle (for logging only)
+        // The main task sets running=false when it finishes (line ~393)
         if let Some(handle) = self.task_handle.take() {
-            match tokio::time::timeout(Duration::from_secs(5), handle).await {
-                Ok(result) => {
-                    if let Err(e) = result {
-                        // Task panicked - log but don't propagate
-                        error!(error = ?e, "loop task panicked");
-                    }
+            tokio::spawn(async move {
+                match tokio::time::timeout(Duration::from_secs(10), handle).await {
+                    Ok(Err(e)) => error!(error = ?e, "loop task panicked"),
+                    Err(_) => warn!("loop task did not exit within timeout"),
+                    Ok(Ok(())) => {}
                 }
-                Err(_) => {
-                    // Timeout - task didn't exit in time
-                    // This shouldn't happen with proper cancellation, but handle it gracefully
-                    warn!("loop task did not exit within timeout");
-                }
-            }
+            });
         }
-
-        self.running.store(false, Ordering::SeqCst);
-        Ok(())
     }
 }
 
