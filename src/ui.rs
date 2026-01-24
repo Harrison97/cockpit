@@ -13,7 +13,7 @@ use ratatui::{
 use tui_term::widget::PseudoTerminal;
 
 use crate::agent::{Agent, AgentStatus, AgentType, ProcessState};
-use crate::app::{App, InputMode, SearchMode, LINES_PER_AGENT};
+use crate::app::{App, ImportableAgent, InputMode, SearchMode, LINES_PER_AGENT};
 
 /// Search state passed to terminal rendering
 pub struct SearchState {
@@ -124,6 +124,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Render input box if in input mode
     if app.input_mode != InputMode::Normal {
         render_input_box(frame, app);
+    }
+
+    // Render import selection if in import mode
+    if let InputMode::SelectingImport(ref agents) = app.input_mode {
+        render_import_selection(frame, agents, app.import_selection_index);
     }
 
     // Render help screen if showing
@@ -768,9 +773,9 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
                 let can_pause = app.selected_agent().map(|a| a.can_pause()).unwrap_or(true);
 
                 if can_pause {
-                    "j/k: nav │ Space/Enter: focus │ r: run │ s: stop │ p: pause │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
+                    "j/k: nav │ Space/Enter: focus │ r: run │ s: stop │ p: pause │ n: new │ i: import │ d: delete │ ?: help │ q: quit".to_string()
                 } else {
-                    "j/k: nav │ Space/Enter: focus │ r: run │ s: stop │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
+                    "j/k: nav │ Space/Enter: focus │ r: run │ s: stop │ n: new │ i: import │ d: delete │ ?: help │ q: quit".to_string()
                 }
             }
         }
@@ -851,6 +856,11 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
 fn render_input_box(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
+    // Don't render input box for SelectingImport mode (has its own renderer)
+    if matches!(app.input_mode, InputMode::SelectingImport(_)) {
+        return;
+    }
+
     // Use different sizes based on input mode - larger for prompts
     let is_multiline_mode = matches!(app.input_mode, InputMode::EnteringPrompt);
 
@@ -888,6 +898,7 @@ fn render_input_box(frame: &mut Frame, app: &App) {
             }
         }
         InputMode::Normal => String::new(),
+        InputMode::SelectingImport(_) => return, // Handled by render_import_selection
     };
 
     let block = Block::default()
@@ -1023,6 +1034,127 @@ fn render_input_box(frame: &mut Frame, app: &App) {
     }
 }
 
+fn render_import_selection(frame: &mut Frame, agents: &[ImportableAgent], selected_index: usize) {
+    let area = frame.area();
+
+    // Calculate box size based on number of agents
+    let box_width = 50.min(area.width - 4).max(40);
+    // Height: title + border (2) + agents (1 each) + hint (2) + border (1)
+    let min_height = 6u16;
+    let max_height = (area.height - 4).min(20);
+    let agents_height = agents.len() as u16;
+    let box_height = (min_height + agents_height).min(max_height);
+
+    let select_area = Rect {
+        x: (area.width - box_width) / 2,
+        y: (area.height - box_height) / 2,
+        width: box_width,
+        height: box_height,
+    };
+
+    // Clear the area behind the selection box
+    frame.render_widget(Clear, select_area);
+
+    let block = Block::default()
+        .title(Span::styled(
+            " Import Agent ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+
+    let inner_area = block.inner(select_area);
+    frame.render_widget(block, select_area);
+
+    // Calculate visible agents with scrolling
+    let available_lines = inner_area.height.saturating_sub(2) as usize; // Reserve 2 for hint
+    let scroll_offset = if selected_index >= available_lines {
+        selected_index - available_lines + 1
+    } else {
+        0
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Render visible agents
+    for (idx, agent) in agents.iter().enumerate().skip(scroll_offset) {
+        if lines.len() >= available_lines {
+            break;
+        }
+
+        let is_selected = idx == selected_index;
+        let arrow = if is_selected { "▶ " } else { "  " };
+
+        let type_indicator = match agent.agent_type {
+            AgentType::RalphLoop => "[loop]",
+            AgentType::ClaudeInstance => "[claude]",
+        };
+
+        let style = if is_selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        let type_style = if is_selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        // Pad to full width for highlighting
+        let name_width = inner_area.width as usize - arrow.len() - type_indicator.len() - 2;
+        let display_name = if agent.name.len() > name_width {
+            format!("{}...", &agent.name[..name_width.saturating_sub(3)])
+        } else {
+            agent.name.clone()
+        };
+        let padding = " ".repeat(name_width.saturating_sub(display_name.len()));
+
+        lines.push(Line::from(vec![
+            Span::styled(arrow, style),
+            Span::styled(display_name, style),
+            Span::styled(padding, style),
+            Span::styled(" ", style),
+            Span::styled(type_indicator, type_style),
+        ]));
+    }
+
+    // Add scroll indicator if needed
+    if agents.len() > available_lines {
+        let indicator = format!(
+            " ({}/{})",
+            selected_index + 1,
+            agents.len()
+        );
+        lines.push(Line::from(Span::styled(
+            indicator,
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        lines.push(Line::from(""));
+    }
+
+    // Add hint at bottom
+    lines.push(Line::from(Span::styled(
+        "j/k: select │ Enter: import │ Esc: cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let content = Paragraph::new(lines).style(Style::default().bg(Color::Black));
+    frame.render_widget(content, inner_area);
+}
+
 fn render_help_screen(frame: &mut Frame) {
     let area = frame.area();
     let help_width = 72.min(area.width - 4);
@@ -1092,7 +1224,7 @@ fn render_help_screen(frame: &mut Frame) {
         section("Agent Management"),
         key_line("n", "Create new agent"),
         key_line("d", "Delete selected agent"),
-        key_line("i", "Send instruction message"),
+        key_line("i", "Import existing agent from disk"),
         Line::from(""),
         section("Terminal Scrolling (when focused)"),
         key_line("Shift+↑/↓", "Scroll up/down one line"),

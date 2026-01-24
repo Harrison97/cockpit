@@ -12,13 +12,24 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 /// Input mode determines what kind of input the user is currently providing
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub enum InputMode {
     #[default]
     Normal,
     EnteringPath,
     EnteringName,
     EnteringPrompt,
+    /// Selecting an existing agent to import from disk
+    SelectingImport(Vec<ImportableAgent>),
+}
+
+/// An agent that exists on disk but isn't loaded in the UI
+#[derive(Clone, PartialEq, Eq)]
+pub struct ImportableAgent {
+    pub name: String,
+    pub agent_dir: std::path::PathBuf,
+    pub agent_type: AgentType,
+    pub has_prompt: bool,
 }
 
 /// Search mode for Ctrl+F terminal search
@@ -82,6 +93,8 @@ pub struct App {
     pub terminal_area: Option<(u16, u16, u16, u16)>, // x, y, width, height
     /// Last known terminal width for detecting width changes that invalidate selection
     last_terminal_width: Option<u16>,
+    /// Index of the selected agent in the import selection list
+    pub import_selection_index: usize,
 }
 
 impl App {
@@ -117,6 +130,7 @@ impl App {
             is_selecting: false,
             terminal_area: None,
             last_terminal_width: None,
+            import_selection_index: 0,
         }
     }
 
@@ -618,12 +632,142 @@ impl App {
         self.pending_agent_dir = None;
     }
 
+    /// Start the import agent flow - finds agents on disk that aren't loaded
+    pub fn start_import(&mut self) {
+        let importable = self.find_importable_agents();
+        if importable.is_empty() {
+            self.status_message = Some("No agents available to import".to_string());
+            return;
+        }
+        self.import_selection_index = 0;
+        self.input_mode = InputMode::SelectingImport(importable);
+    }
+
+    /// Find agent directories that exist on disk but aren't currently loaded
+    fn find_importable_agents(&self) -> Vec<ImportableAgent> {
+        let agents_dir = get_agents_dir();
+        if !agents_dir.exists() {
+            return Vec::new();
+        }
+
+        // Get names of currently loaded agents
+        let loaded_names: std::collections::HashSet<&str> =
+            self.agents.iter().map(|a| a.name.as_str()).collect();
+
+        let mut importable = Vec::new();
+
+        // Read the agents directory
+        if let Ok(entries) = std::fs::read_dir(&agents_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+
+                let name = match path.file_name().and_then(|n| n.to_str()) {
+                    Some(n) => n.to_string(),
+                    None => continue,
+                };
+
+                // Skip if already loaded
+                if loaded_names.contains(name.as_str()) {
+                    continue;
+                }
+
+                // Skip hidden directories
+                if name.starts_with('.') {
+                    continue;
+                }
+
+                // Check if this looks like a valid agent directory
+                let prompt_path = path.join("PROMPT.md");
+                let has_prompt = prompt_path.exists();
+
+                // Determine agent type based on whether PROMPT.md exists and has content
+                let agent_type = if has_prompt {
+                    // Check if PROMPT.md has content (non-empty = RalphLoop)
+                    match std::fs::read_to_string(&prompt_path) {
+                        Ok(content) if !content.trim().is_empty() => AgentType::RalphLoop,
+                        _ => AgentType::ClaudeInstance,
+                    }
+                } else {
+                    AgentType::ClaudeInstance
+                };
+
+                importable.push(ImportableAgent {
+                    name,
+                    agent_dir: path,
+                    agent_type,
+                    has_prompt,
+                });
+            }
+        }
+
+        // Sort alphabetically
+        importable.sort_by(|a, b| a.name.cmp(&b.name));
+        importable
+    }
+
+    /// Import the selected agent
+    fn import_selected_agent(&mut self) {
+        let importable = match &self.input_mode {
+            InputMode::SelectingImport(list) => list.clone(),
+            _ => return,
+        };
+
+        if let Some(agent_info) = importable.get(self.import_selection_index) {
+            // Try to determine working_dir from existing state or use current dir
+            let working_dir = PathBuf::from(".");
+
+            let agent = Agent::with_project(
+                &agent_info.name,
+                agent_info.agent_dir.clone(),
+                working_dir,
+                agent_info.agent_type,
+            );
+
+            let type_label = match agent_info.agent_type {
+                AgentType::ClaudeInstance => "Claude instance",
+                AgentType::RalphLoop => "Ralph loop",
+            };
+
+            info!(name = %agent_info.name, agent_type = type_label, "agent imported");
+            self.status_message = Some(format!("Imported {}: {}", type_label, agent_info.name));
+
+            self.agents.push(agent);
+            self.selected_index = self.agents.len() - 1;
+            self.save_state();
+        }
+
+        self.input_mode = InputMode::Normal;
+        self.import_selection_index = 0;
+    }
+
+    /// Navigate up in import selection
+    pub fn import_select_prev(&mut self) {
+        if let InputMode::SelectingImport(ref list) = self.input_mode {
+            if !list.is_empty() && self.import_selection_index > 0 {
+                self.import_selection_index -= 1;
+            }
+        }
+    }
+
+    /// Navigate down in import selection
+    pub fn import_select_next(&mut self) {
+        if let InputMode::SelectingImport(ref list) = self.input_mode {
+            if !list.is_empty() && self.import_selection_index < list.len() - 1 {
+                self.import_selection_index += 1;
+            }
+        }
+    }
+
     pub fn cancel_input(&mut self) {
         self.input_mode = InputMode::Normal;
         self.input_buffer.clear();
         self.paste_info = None;
         self.pending_agent_dir = None;
         self.pending_agent_name = None;
+        self.import_selection_index = 0;
     }
 
     fn submit_input(&mut self) {
@@ -678,6 +822,9 @@ impl App {
             }
             InputMode::EnteringPrompt => {
                 self.create_loop_from_input();
+            }
+            InputMode::SelectingImport(_) => {
+                // Import selection is handled separately via import_selected_agent()
             }
         }
     }
@@ -762,6 +909,7 @@ impl App {
             InputMode::EnteringPath => "Target repo path: ",
             InputMode::EnteringName => "Agent name: ",
             InputMode::EnteringPrompt => "Prompt (optional): ",
+            InputMode::SelectingImport(_) => "", // Import uses its own UI
         }
     }
 
@@ -971,6 +1119,10 @@ impl App {
                     }
                     true
                 }
+                KeyCode::Char('i') => {
+                    self.start_import();
+                    true
+                }
                 _ => false,
             }
         }
@@ -982,6 +1134,29 @@ impl App {
         _modifiers: crossterm::event::KeyModifiers,
     ) -> bool {
         use crossterm::event::KeyCode;
+
+        // Handle import selection mode separately
+        if matches!(self.input_mode, InputMode::SelectingImport(_)) {
+            return match code {
+                KeyCode::Enter => {
+                    self.import_selected_agent();
+                    true
+                }
+                KeyCode::Esc => {
+                    self.cancel_input();
+                    true
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.import_select_next();
+                    true
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.import_select_prev();
+                    true
+                }
+                _ => false,
+            };
+        }
 
         match code {
             KeyCode::Enter => {
