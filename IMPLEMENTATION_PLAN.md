@@ -317,6 +317,37 @@
   - Update indicator as user scrolls
   - Show "[LIVE]" when at bottom (scroll_offset = 0)
 
+## Phase 14: Fix Random Restart Bug
+
+- [x] **14.1 Increase idle timeout from 2s to 5 minutes**
+  - Root cause: `IDLE_TIMEOUT_SECS = 2` was WAY too aggressive
+  - Claude often thinks for 10-60+ seconds while reading files or planning
+  - 2-second timeout caused: premature restarts, ProcessState stuck on Exiting, input blocked
+  - Changed to 300 seconds (5 minutes) to allow Claude to think
+
+- [x] **14.2 Block state changes when paused**
+  - Paused agents should NEVER transition to Exiting or restart
+  - Implemented: idle timeout check at loop_manager.rs:603 includes `!paused.load()`
+  - This prevents restart loop from triggering when agent is paused
+
+- [x] **14.3 Clear Exiting state on restart**
+  - Ensure ProcessState transitions from Exiting → Starting when new iteration begins
+  - Implemented: agent.rs:405-407 sets ProcessState::Starting when [Starting...] marker is received
+  - This properly clears Exiting state on restart
+
+- [x] **14.4 Allow Ctrl+C during Starting state**
+  - Input is blocked during Starting to prevent keystroke bleeding
+  - Implemented: agent.rs:596-603 allows Ctrl+C (0x03) through even in Starting state
+  - Users can interrupt slow startup or stuck processes
+
+- [x] **14.5 Fix false-positive marker detection (CRITICAL)**
+  - **ROOT CAUSE**: Markers like `[Exiting...]` and `[Starting...]` were plain text
+  - If Claude ever output these strings (discussing code, logs, etc.), it triggered state changes!
+  - This caused: random Exiting state, input blocked, stuck UI - even on fresh start
+  - **FIX**: Changed markers to OSC escape sequences: `\x1b]9999;exiting\x07`
+  - These are terminal control codes that Claude would never naturally output
+  - Files changed: agent.rs (marker constants), loop_manager.rs (marker sends)
+
 ## Completion Criteria
 
 All items checked. Application:

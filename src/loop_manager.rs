@@ -143,7 +143,10 @@ fn is_claude_installed() -> bool {
 }
 
 /// How long to wait with no output before considering Claude "idle"
-const IDLE_TIMEOUT_SECS: u64 = 2;
+/// Set to 5 minutes - Claude often thinks for extended periods while reading files,
+/// processing code, or waiting for tool responses. A shorter timeout causes
+/// premature restarts and input blocking (ProcessState stuck on Exiting).
+const IDLE_TIMEOUT_SECS: u64 = 300;
 
 /// Commands sent to the PTY management task
 #[derive(Debug)]
@@ -315,10 +318,11 @@ impl RalphLoop {
         initial_size: (u16, u16),
     ) {
         // Send starting marker on initial start (from stopped state)
+        // Uses OSC escape sequence to prevent false positives from Claude's output
         let _ = tx
             .send(TerminalData::new(
                 agent_name.clone(),
-                b"[Starting...]\r\n".to_vec(),
+                b"\x1b]9999;starting\x07".to_vec(),
             ))
             .await;
 
@@ -388,10 +392,11 @@ impl RalphLoop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
 
                 // Send starting marker to trigger process state transition
+                // Uses OSC escape sequence to prevent false positives from Claude's output
                 let _ = tx
                     .send(TerminalData::new(
                         agent_name.clone(),
-                        b"[Starting...]\r\n".to_vec(),
+                        b"\x1b]9999;starting\x07".to_vec(),
                     ))
                     .await;
             }
@@ -467,9 +472,10 @@ impl RalphLoop {
                 // Priority 1: Check for cancellation
                 _ = cancel_token.cancelled() => {
                     // Signal that we're in graceful exit phase
+                    // Uses OSC escape sequence to prevent false positives from Claude's output
                     let _ = tx.send(TerminalData::new(
                         agent_name.to_string(),
-                        b"[Exiting...]".to_vec(),
+                        b"\x1b]9999;exiting\x07".to_vec(),
                     )).await;
 
                     // Graceful shutdown: send double Ctrl+C to exit Claude Code

@@ -359,9 +359,11 @@ impl Agent {
     }
 
     /// Marker sent by loop_manager when a new Claude iteration is about to start
-    const STARTING_MARKER: &'static [u8] = b"[Starting...]";
+    /// Uses a unique prefix to prevent false positives from Claude's output
+    const STARTING_MARKER: &'static [u8] = b"\x1b]9999;starting\x07";
     /// Marker sent by loop_manager when graceful shutdown begins
-    const EXITING_MARKER: &'static [u8] = b"[Exiting...]";
+    /// Uses a unique prefix to prevent false positives from Claude's output
+    const EXITING_MARKER: &'static [u8] = b"\x1b]9999;exiting\x07";
     /// Characters that indicate Claude Code is ready for input
     /// The ❯ prompt character or the banner text
     const READY_INDICATORS: &'static [&'static [u8]] = &[
