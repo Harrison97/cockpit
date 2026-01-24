@@ -30,7 +30,7 @@ Agents appear frozen because `send_input()` silently drops ALL keyboard input wh
 - **Rationale**: More patterns = faster transition to Ready state
 
 ### 4. Log When Input is Dropped
-- [ ] **Task**: Add tracing::debug log when input is dropped due to state check
+- [x] **Task**: Add tracing::debug log when input is dropped due to state check
 - **File**: `src/agent.rs` in `send_input()`
 - **Change**: Before returning `Ok(())` for non-Ready state, log `debug!("Input dropped: process_state={:?}", self.process_state)`
 - **Rationale**: Helps debugging; makes silent drops observable

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc;
-use tracing::warn;
+use tracing::{debug, warn};
 
 /// Type of agent: RalphLoop (has PROMPT.md, loops continuously) vs ClaudeInstance (no prompt, single run)
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
@@ -579,6 +579,7 @@ impl Agent {
             self.process_state,
             ProcessState::Stopping | ProcessState::Exiting | ProcessState::Stopped
         ) {
+            debug!("Input dropped: process_state={:?}", self.process_state);
             return Ok(());
         }
 
@@ -586,6 +587,7 @@ impl Agent {
         if self.process_state == ProcessState::Starting {
             let is_interrupt = data.contains(&0x03);
             if !is_interrupt {
+                debug!("Input dropped: process_state={:?}", self.process_state);
                 return Ok(());
             }
         }
