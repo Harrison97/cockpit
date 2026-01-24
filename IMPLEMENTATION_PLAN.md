@@ -348,6 +348,45 @@
   - These are terminal control codes that Claude would never naturally output
   - Files changed: agent.rs (marker constants), loop_manager.rs (marker sends)
 
+## Phase 15: Replace Text Markers with Typed Events
+
+The current architecture embeds state markers into the terminal data stream and parses them out.
+This is error-prone - even OSC escape sequences could theoretically conflict with future terminal features.
+
+**Goal**: Replace marker-based state detection with explicit typed events.
+
+- [ ] **15.1 Convert TerminalData struct to enum**
+  - Change from `struct TerminalData { data: Vec<u8> }`
+  - To enum: `TerminalData::Output { data: Vec<u8> }` | `TerminalData::StateChange { state: ProcessState }`
+  - This makes state changes explicit and strongly typed
+
+- [ ] **15.2 Update loop_manager.rs to send StateChange events**
+  - Replace `tx.send(TerminalData::new(name, b"\x1b]9999;exiting\x07".to_vec()))`
+  - With `tx.send(TerminalData::StateChange { agent_name, state: ProcessState::Exiting })`
+  - Similarly for Starting state
+
+- [ ] **15.3 Update app.rs to dispatch events by type**
+  - Match on `TerminalData::Output` vs `TerminalData::StateChange`
+  - Route Output to `agent.process_terminal_data()`
+  - Route StateChange to new `agent.handle_state_change()`
+
+- [ ] **15.4 Remove marker detection from agent.rs**
+  - Delete `EXITING_MARKER` and `STARTING_MARKER` constants
+  - Delete marker detection code from `process_terminal_data()`
+  - Add new `handle_state_change(state: ProcessState)` method
+
+- [ ] **15.5 Add Exited state for clean process exit**
+  - Add `ProcessState::Exited` for when process exits naturally (vs user-initiated Stopping)
+  - Send `StateChange::Exited` when child.try_wait() returns Some(status)
+  - This distinguishes "Claude finished" from "user stopped"
+
+**Benefits**:
+- No string/byte matching anywhere
+- Impossible to have false positives
+- State changes are strongly typed and explicit
+- Clear separation of terminal output from control events
+- Easier to add new state transitions in the future
+
 ## Completion Criteria
 
 All items checked. Application:
