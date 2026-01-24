@@ -36,7 +36,7 @@ Agents appear frozen because `send_input()` silently drops ALL keyboard input wh
 - **Rationale**: Helps debugging; makes silent drops observable
 
 ### 5. Add Visual Indicator for Not-Ready State
-- [ ] **Task**: Show "(starting...)" or similar in the UI when agent is not Ready
+- [x] **Task**: Show "(starting...)" or similar in the UI when agent is not Ready
 - **File**: `src/ui.rs` in the agent status rendering
 - **Change**: Display `process_state` alongside `AgentStatus` when not Ready
 - **Rationale**: Users can see why their input isn't working

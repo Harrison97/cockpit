@@ -238,8 +238,14 @@ fn render_agent_list(
         }
         lines_used += 1;
 
-        // Line 2: Status
-        let status_text = format!("  {}", agent.status);
+        // Line 2: Status (with process state hint when not ready)
+        let process_hint = match agent.process_state {
+            ProcessState::Starting => " (starting...)",
+            ProcessState::Stopping => " (stopping...)",
+            ProcessState::Exiting => " (exiting...)",
+            _ => "",
+        };
+        let status_text = format!("  {}{}", agent.status, process_hint);
         let status_style = if is_selected {
             Style::default().fg(Color::Black).bg(Color::Cyan)
         } else {
@@ -576,11 +582,7 @@ fn render_terminal_pane(
                                 let fg = cell.fg;
                                 let bg = cell.bg;
                                 cell.set_fg(bg);
-                                cell.set_bg(if fg == Color::Reset {
-                                    Color::White
-                                } else {
-                                    fg
-                                });
+                                cell.set_bg(if fg == Color::Reset { Color::White } else { fg });
                             }
                         }
                     }
