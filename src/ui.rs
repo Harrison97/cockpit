@@ -801,7 +801,10 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         // Parse keybindings to highlight keys differently from descriptions
         let parts: Vec<&str> = keybindings.split('│').collect();
         let mut spans: Vec<Span> = Vec::new();
-        spans.push(Span::styled(" ", Style::default().bg(Color::Rgb(25, 25, 30))));
+        spans.push(Span::styled(
+            " ",
+            Style::default().bg(Color::Rgb(25, 25, 30)),
+        ));
 
         for (idx, part) in parts.iter().enumerate() {
             if idx > 0 {
@@ -820,9 +823,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
                 let desc = &part[colon_pos + 2..];
                 spans.push(Span::styled(
                     key.to_string(),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .bg(Color::Rgb(25, 25, 30)),
+                    Style::default().fg(Color::Cyan).bg(Color::Rgb(25, 25, 30)),
                 ));
                 spans.push(Span::styled(
                     ": ",
@@ -1105,9 +1106,7 @@ fn render_import_selection(frame: &mut Frame, agents: &[ImportableAgent], select
         };
 
         let type_style = if is_selected {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
+            Style::default().fg(Color::Black).bg(Color::Cyan)
         } else {
             Style::default().fg(Color::DarkGray)
         };
@@ -1132,11 +1131,7 @@ fn render_import_selection(frame: &mut Frame, agents: &[ImportableAgent], select
 
     // Add scroll indicator if needed
     if agents.len() > available_lines {
-        let indicator = format!(
-            " ({}/{})",
-            selected_index + 1,
-            agents.len()
-        );
+        let indicator = format!(" ({}/{})", selected_index + 1, agents.len());
         lines.push(Line::from(Span::styled(
             indicator,
             Style::default().fg(Color::DarkGray),
@@ -1192,7 +1187,9 @@ fn render_help_screen(frame: &mut Frame) {
             Span::styled("  ", Style::default()),
             Span::styled(
                 format!("{:13}", key),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(desc.to_string(), Style::default().fg(Color::White)),
         ])

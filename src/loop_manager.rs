@@ -63,7 +63,10 @@ pub enum TerminalData {
     /// Raw PTY output to display in terminal
     Output { agent_name: String, data: Vec<u8> },
     /// State change event (Starting, Ready, Exiting, Exited, etc.)
-    StateChange { agent_name: String, state: ProcessState },
+    StateChange {
+        agent_name: String,
+        state: ProcessState,
+    },
     /// Iteration completed (ralph loop restarting)
     IterationComplete { agent_name: String },
 }
