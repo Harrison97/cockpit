@@ -14,7 +14,7 @@ use app::App;
 use crossterm::{
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyboardEnhancementFlags, KeyEventKind, MouseButton, MouseEventKind,
+        Event, KeyEventKind, KeyboardEnhancementFlags, MouseButton, MouseEventKind,
         PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     terminal::{

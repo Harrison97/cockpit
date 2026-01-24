@@ -60,6 +60,7 @@ pub struct App {
     pub status_message: Option<String>,
     pub show_help: bool,
     pub show_delete_confirm: bool,
+    pub show_stop_confirm: bool,
     /// Scroll offset for agent list (in number of agents)
     pub list_scroll_offset: usize,
     /// Current search mode for terminal Ctrl+F search
@@ -105,6 +106,7 @@ impl App {
             status_message: None,
             show_help: false,
             show_delete_confirm: false,
+            show_stop_confirm: false,
             list_scroll_offset: 0,
             search_mode: SearchMode::Off,
             search_matches: Vec::new(),
@@ -871,6 +873,20 @@ impl App {
             return true;
         }
 
+        // If stop confirmation is showing, handle y/n
+        if self.show_stop_confirm {
+            match code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.show_stop_confirm = false;
+                    self.stop_selected();
+                }
+                _ => {
+                    self.show_stop_confirm = false;
+                }
+            }
+            return true;
+        }
+
         // When output is focused
         if self.output_focused {
             // Handle search mode if active
@@ -983,7 +999,12 @@ impl App {
                     true
                 }
                 KeyCode::Char('s') => {
-                    self.stop_selected();
+                    // Only show confirmation if agent is running
+                    if let Some(agent) = self.selected_agent() {
+                        if agent.status != AgentStatus::Stopped {
+                            self.show_stop_confirm = true;
+                        }
+                    }
                     true
                 }
                 KeyCode::Char('n') => {

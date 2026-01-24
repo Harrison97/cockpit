@@ -135,6 +135,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.show_delete_confirm {
         render_delete_confirm(frame, app);
     }
+
+    // Render stop confirmation if showing
+    if app.show_stop_confirm {
+        render_stop_confirm(frame, app);
+    }
 }
 
 fn render_agent_list(
@@ -1062,6 +1067,56 @@ fn render_delete_confirm(frame: &mut Frame, app: &App) {
 
     let text = vec![
         Line::from(format!("Delete \"{}\"?", agent_name)),
+        Line::from(""),
+        Line::from(Span::styled(
+            "y: confirm │ any other key: cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let content = Paragraph::new(text)
+        .style(Style::default().bg(Color::Black))
+        .alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(content, inner_area);
+}
+
+fn render_stop_confirm(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+
+    let box_width = 44.min(area.width - 4);
+    let box_height = 5;
+
+    let confirm_area = Rect {
+        x: (area.width - box_width) / 2,
+        y: (area.height - box_height) / 2,
+        width: box_width,
+        height: box_height,
+    };
+
+    frame.render_widget(Clear, confirm_area);
+
+    let agent_name = app
+        .selected_agent()
+        .map(|a| a.name.as_str())
+        .unwrap_or("agent");
+
+    let block = Block::default()
+        .title(Span::styled(
+            " Confirm Stop ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Yellow))
+        .style(Style::default().bg(Color::Black));
+
+    let inner_area = block.inner(confirm_area);
+    frame.render_widget(block, confirm_area);
+
+    let text = vec![
+        Line::from(format!("Stop \"{}\"? Session will be killed.", agent_name)),
         Line::from(""),
         Line::from(Span::styled(
             "y: confirm │ any other key: cancel",
