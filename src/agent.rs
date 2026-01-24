@@ -368,6 +368,9 @@ impl Agent {
         "❯".as_bytes(), // Claude's prompt character
         b"Claude Code", // Banner text
         b"claude-code", // Alternative banner
+        b"Thinking",    // Claude's thinking indicator
+        b">",           // Alternative prompt character
+        b"$",           // Shell prompt (for tool execution)
     ];
 
     /// Process raw terminal data from the PTY

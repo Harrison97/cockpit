@@ -21,7 +21,7 @@ Agents appear frozen because `send_input()` silently drops ALL keyboard input wh
 - **Fields to add**: `starting_since: Option<Instant>` to Agent struct
 
 ### 3. Add More Ready Indicators
-- [ ] **Task**: Expand `READY_INDICATORS` to include more patterns that indicate Claude is ready
+- [x] **Task**: Expand `READY_INDICATORS` to include more patterns that indicate Claude is ready
 - **File**: `src/agent.rs` around line 363
 - **Add indicators**:
   - `"Thinking"` - Claude's thinking indicator
