@@ -220,6 +220,16 @@ fn render_agent_list(
         agents_displayed += 1;
 
         let is_selected = i == selected_index;
+        let display_idx = i - scroll_offset; // 0-based index of visible agents
+        let is_alternate = display_idx % 2 == 1;
+        let width = inner_area.width as usize;
+
+        // Base background for alternating rows (subtle visual separation)
+        let alt_bg = if is_alternate {
+            Color::Rgb(30, 30, 35) // Very subtle alternating background
+        } else {
+            Color::Reset
+        };
 
         // Line 1: Arrow + Name
         let arrow = if is_selected { "▶ " } else { "  " };
@@ -230,15 +240,28 @@ fn render_agent_list(
                 .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default()
+                .fg(Color::White)
+                .bg(alt_bg)
+                .add_modifier(Modifier::BOLD)
         };
+        let padded_name = format!("{:width$}", name_content, width = width);
         if is_selected {
-            let padded_name = format!("{:width$}", name_content, width = inner_area.width as usize);
             lines.push(Line::from(Span::styled(padded_name, name_style)));
         } else {
+            // Use separate spans for arrow and name to color them differently
+            let arrow_style = Style::default().fg(Color::DarkGray).bg(alt_bg);
+            let name_only_style = Style::default()
+                .fg(Color::White)
+                .bg(alt_bg)
+                .add_modifier(Modifier::BOLD);
+            let name_only = &agent.name;
+            let padding_len = width.saturating_sub(arrow.len() + name_only.len());
+            let padding = " ".repeat(padding_len);
             lines.push(Line::from(vec![
-                Span::styled(arrow, Style::default().fg(Color::DarkGray)),
-                Span::styled(&agent.name, name_style),
+                Span::styled(arrow, arrow_style),
+                Span::styled(name_only.clone(), name_only_style),
+                Span::styled(padding, Style::default().bg(alt_bg)),
             ]));
         }
         lines_used += 1;
@@ -252,17 +275,18 @@ fn render_agent_list(
         };
         let status_text = format!("  {}{}", agent.status, process_hint);
         let status_style = if is_selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(agent.status.color())
+            Style::default()
+                .fg(agent.status.color())
+                .bg(alt_bg)
+                .add_modifier(Modifier::BOLD)
         };
-        if is_selected {
-            let padded_status =
-                format!("{:width$}", status_text, width = inner_area.width as usize);
-            lines.push(Line::from(Span::styled(padded_status, status_style)));
-        } else {
-            lines.push(Line::from(Span::styled(status_text, status_style)));
-        }
+        let padded_status = format!("{:width$}", status_text, width = width);
+        lines.push(Line::from(Span::styled(padded_status, status_style)));
         lines_used += 1;
 
         // Line 3: Uptime or PID
@@ -278,14 +302,10 @@ fn render_agent_list(
         let info_style = if is_selected {
             Style::default().fg(Color::Black).bg(Color::Cyan)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(Color::DarkGray).bg(alt_bg)
         };
-        if is_selected {
-            let padded_info = format!("{:width$}", info_text, width = inner_area.width as usize);
-            lines.push(Line::from(Span::styled(padded_info, info_style)));
-        } else {
-            lines.push(Line::from(Span::styled(info_text, info_style)));
-        }
+        let padded_info = format!("{:width$}", info_text, width = width);
+        lines.push(Line::from(Span::styled(padded_info, info_style)));
         lines_used += 1;
 
         // Line 4: Type indicator or iteration count
@@ -296,19 +316,15 @@ fn render_agent_list(
         let type_style = if is_selected {
             Style::default().fg(Color::Black).bg(Color::Cyan)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(Color::DarkGray).bg(alt_bg)
         };
-        if is_selected {
-            let padded_type = format!("{:width$}", type_text, width = inner_area.width as usize);
-            lines.push(Line::from(Span::styled(padded_type, type_style)));
-        } else {
-            lines.push(Line::from(Span::styled(type_text, type_style)));
-        }
+        let padded_type = format!("{:width$}", type_text, width = width);
+        lines.push(Line::from(Span::styled(padded_type, type_style)));
         lines_used += 1;
 
         // Line 5: Working directory (the target repo)
         if let Some(ref working_dir) = agent.working_dir {
-            let max_path_len = (inner_area.width as usize).saturating_sub(2);
+            let max_path_len = width.saturating_sub(2);
             let path_str = working_dir.to_string_lossy();
             let truncated_path = if path_str.len() > max_path_len {
                 format!("…{}", &path_str[path_str.len() - max_path_len + 1..])
@@ -319,21 +335,20 @@ fn render_agent_list(
             let path_style = if is_selected {
                 Style::default().fg(Color::Black).bg(Color::Cyan)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(Color::DarkGray).bg(alt_bg)
             };
-            if is_selected {
-                let padded_path =
-                    format!("{:width$}", path_text, width = inner_area.width as usize);
-                lines.push(Line::from(Span::styled(padded_path, path_style)));
-            } else {
-                lines.push(Line::from(Span::styled(path_text, path_style)));
-            }
+            let padded_path = format!("{:width$}", path_text, width = width);
+            lines.push(Line::from(Span::styled(padded_path, path_style)));
             lines_used += 1;
         }
 
-        // Blank line between agents (if not last visible agent)
+        // Separator line between agents (dim horizontal divider instead of blank)
         if i < agents.len() - 1 && lines_used < available_lines {
-            lines.push(Line::from(""));
+            let separator = "─".repeat(width);
+            lines.push(Line::from(Span::styled(
+                separator,
+                Style::default().fg(Color::Rgb(50, 50, 55)),
+            )));
             lines_used += 1;
         }
     }
@@ -426,31 +441,34 @@ fn render_terminal_pane(
         None => ("Terminal (none)".to_string(), 0),
     };
 
-    let border_color = if is_searching {
-        Color::Yellow
+    let (border_color, border_type) = if is_searching {
+        (Color::Yellow, BorderType::Double)
     } else if output_focused {
-        Color::Cyan
+        (Color::Cyan, BorderType::Double)
     } else {
-        Color::DarkGray
+        (Color::DarkGray, BorderType::Rounded)
     };
 
-    let title_color = if is_searching {
-        Color::Yellow
+    let title_style = if is_searching {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else if output_focused {
-        Color::Cyan
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
-        Color::White
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
     };
 
     let block = Block::default()
-        .title(Span::styled(
-            title,
-            Style::default()
-                .fg(title_color)
-                .add_modifier(Modifier::BOLD),
-        ))
+        .title(Span::styled(format!(" {} ", title), title_style))
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
+        .border_type(border_type)
         .border_style(Style::default().fg(border_color));
 
     let inner_area = block.inner(area);
@@ -759,16 +777,74 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     // Show status message if available, otherwise show keybindings
-    let content = if let Some(ref msg) = app.status_message {
-        Span::styled(format!(" {} ", msg), Style::default().fg(Color::Yellow))
-    } else {
-        Span::styled(
-            format!(" {} ", &keybindings),
-            Style::default().fg(Color::DarkGray),
+    let (content, bg_color) = if let Some(ref msg) = app.status_message {
+        (
+            Line::from(vec![
+                Span::styled(" ", Style::default().bg(Color::Rgb(40, 40, 30))),
+                Span::styled(
+                    msg.clone(),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .bg(Color::Rgb(40, 40, 30))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" ", Style::default().bg(Color::Rgb(40, 40, 30))),
+            ]),
+            Color::Rgb(40, 40, 30),
         )
+    } else {
+        // Parse keybindings to highlight keys differently from descriptions
+        let parts: Vec<&str> = keybindings.split('│').collect();
+        let mut spans: Vec<Span> = Vec::new();
+        spans.push(Span::styled(" ", Style::default().bg(Color::Rgb(25, 25, 30))));
+
+        for (idx, part) in parts.iter().enumerate() {
+            if idx > 0 {
+                spans.push(Span::styled(
+                    " │ ",
+                    Style::default()
+                        .fg(Color::Rgb(60, 60, 70))
+                        .bg(Color::Rgb(25, 25, 30)),
+                ));
+            }
+
+            let part = part.trim();
+            // Split on ": " to separate key from description
+            if let Some(colon_pos) = part.find(": ") {
+                let key = &part[..colon_pos];
+                let desc = &part[colon_pos + 2..];
+                spans.push(Span::styled(
+                    key.to_string(),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .bg(Color::Rgb(25, 25, 30)),
+                ));
+                spans.push(Span::styled(
+                    ": ",
+                    Style::default()
+                        .fg(Color::Rgb(80, 80, 90))
+                        .bg(Color::Rgb(25, 25, 30)),
+                ));
+                spans.push(Span::styled(
+                    desc.to_string(),
+                    Style::default()
+                        .fg(Color::Rgb(140, 140, 150))
+                        .bg(Color::Rgb(25, 25, 30)),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    part.to_string(),
+                    Style::default()
+                        .fg(Color::Rgb(140, 140, 150))
+                        .bg(Color::Rgb(25, 25, 30)),
+                ));
+            }
+        }
+
+        (Line::from(spans), Color::Rgb(25, 25, 30))
     };
 
-    let footer = Paragraph::new(Line::from(content));
+    let footer = Paragraph::new(content).style(Style::default().bg(bg_color));
     frame.render_widget(footer, area);
 }
 
@@ -949,8 +1025,8 @@ fn render_input_box(frame: &mut Frame, app: &App) {
 
 fn render_help_screen(frame: &mut Frame) {
     let area = frame.area();
-    let help_width = 60.min(area.width - 4);
-    let help_height = 20.min(area.height - 4);
+    let help_width = 72.min(area.width - 4);
+    let help_height = 32.min(area.height - 4);
 
     let help_area = Rect {
         x: (area.width - help_width) / 2,
@@ -966,50 +1042,73 @@ fn render_help_screen(frame: &mut Frame) {
         .title(Span::styled(
             " Help ",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(Color::Black)
+                .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
+        .border_type(BorderType::Double)
         .border_style(Style::default().fg(Color::Cyan))
         .style(Style::default().bg(Color::Black));
 
     let inner_area = block.inner(help_area);
     frame.render_widget(block, help_area);
 
+    // Helper to create a styled key-description line
+    fn key_line(key: &str, desc: &str) -> Line<'static> {
+        Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                format!("{:13}", key),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(desc.to_string(), Style::default().fg(Color::White)),
+        ])
+    }
+
+    // Helper for section headers
+    fn section(title: &str) -> Line<'static> {
+        Line::from(Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ))
+    }
+
     let help_text = vec![
-        Line::from(Span::styled(
-            "Navigation",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  j/k, ↑/↓    Navigate agents"),
-        Line::from("  Tab         Next agent (or focus if single) / Unfocus"),
-        Line::from("  Space/Enter Focus terminal (type to interact)"),
-        Line::from("  Mouse wheel Scroll terminal output"),
+        section("Navigation"),
+        key_line("j / k", "Move selection up/down in agent list"),
+        key_line("↑ / ↓", "Move selection up/down in agent list"),
+        key_line("Tab", "Cycle agents / toggle terminal focus"),
+        key_line("Space/Enter", "Focus terminal pane for interaction"),
         Line::from(""),
-        Line::from(Span::styled(
-            "Agent Control",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  r           Run/Resume agent"),
-        Line::from("  s           Stop agent"),
-        Line::from("  p           Pause agent (ralph loops only)"),
-        Line::from("  Ctrl+C      Interrupt Claude (when focused)"),
+        section("Agent Control"),
+        key_line("r", "Run agent (or resume if paused)"),
+        key_line("s", "Stop agent (kills session)"),
+        key_line("p", "Pause agent (ralph loops only)"),
+        key_line("Ctrl+C", "Interrupt Claude (when terminal focused)"),
         Line::from(""),
-        Line::from(Span::styled(
-            "Management",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  n           Create new agent"),
-        Line::from("  d           Delete agent"),
+        section("Agent Management"),
+        key_line("n", "Create new agent"),
+        key_line("d", "Delete selected agent"),
+        key_line("i", "Send instruction message"),
         Line::from(""),
-        Line::from(Span::styled(
-            "Input Mode",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  Enter       Submit input"),
-        Line::from("  \\+Enter     Add newline"),
-        Line::from("  Esc         Cancel"),
+        section("Terminal Scrolling (when focused)"),
+        key_line("Shift+↑/↓", "Scroll up/down one line"),
+        key_line("Mouse wheel", "Scroll up/down"),
+        key_line("Ctrl+D/U", "Scroll half-page down/up"),
+        key_line("g / G", "Jump to top / bottom of history"),
+        Line::from(""),
+        section("Search Mode (Ctrl+F when focused)"),
+        key_line("Ctrl+F", "Enter search mode"),
+        key_line("n / N", "Next / previous match"),
+        key_line("Enter", "Confirm search, switch to navigation"),
+        key_line("q / Esc", "Exit search mode"),
+        Line::from(""),
+        section("General"),
+        key_line("?", "Toggle this help screen"),
+        key_line("q", "Quit cockpit"),
         Line::from(""),
         Line::from(Span::styled(
             "Press any key to close",
