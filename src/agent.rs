@@ -361,9 +361,9 @@ impl Agent {
     /// Characters that indicate Claude Code is ready for input
     /// The ❯ prompt character or the banner text
     const READY_INDICATORS: &'static [&'static [u8]] = &[
-        "❯".as_bytes(),      // Claude's prompt character
-        b"Claude Code",      // Banner text
-        b"claude-code",      // Alternative banner
+        "❯".as_bytes(), // Claude's prompt character
+        b"Claude Code", // Banner text
+        b"claude-code", // Alternative banner
     ];
 
     /// Process raw terminal data from the PTY
@@ -497,6 +497,11 @@ impl Agent {
 
     /// Resize the terminal to the given dimensions (only if size changed)
     pub fn resize(&mut self, rows: u16, cols: u16) {
+        // Enforce minimum dimensions to prevent vt100 panics with wide chars
+        // Need at least 4 cols for safe wide character handling
+        let rows = rows.max(1);
+        let cols = cols.max(4);
+
         let (old_rows, old_cols) = self.last_size;
         let size_changed = (old_rows, old_cols) != (rows, cols);
         let width_changed = cols != old_cols;
@@ -550,13 +555,25 @@ impl Agent {
 
     /// Send keyboard input to the agent's PTY.
     /// Input is silently dropped if process is not Ready (e.g., during Starting or Stopping).
+    /// Exception: Ctrl+C (0x03) is allowed through during Starting state so users can interrupt.
     pub fn send_input(&self, data: &[u8]) -> Result<(), AgentError> {
-        // Only forward input when process is Ready
-        if self.process_state != ProcessState::Ready {
-            // Silently drop input during transitions
+        // During Stopping/Exiting, block ALL input to allow graceful shutdown
+        if matches!(
+            self.process_state,
+            ProcessState::Stopping | ProcessState::Exiting | ProcessState::Stopped
+        ) {
             return Ok(());
         }
 
+        // During Starting, only allow Ctrl+C (0x03) through so users can interrupt
+        if self.process_state == ProcessState::Starting {
+            let is_interrupt = data.contains(&0x03);
+            if !is_interrupt {
+                return Ok(());
+            }
+        }
+
+        // Ready state: forward all input
         if let Some(ref ralph_loop) = self.ralph_loop {
             ralph_loop.send_input(data)?;
         }
@@ -983,11 +1000,7 @@ impl Agent {
             for row in start_row..=end_row {
                 // Determine column range for this row
                 let col_start = if row == start_row { start_col } else { 0 };
-                let col_end = if row == end_row {
-                    end_col + 1
-                } else {
-                    cols
-                };
+                let col_end = if row == end_row { end_col + 1 } else { cols };
 
                 // We need to access the row at the correct scroll position
                 // Set scrollback to position this row as visible
