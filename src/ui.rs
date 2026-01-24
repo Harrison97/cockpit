@@ -416,7 +416,7 @@ fn render_terminal_pane(
                     " [LIVE - Tab to exit]".to_string()
                 }
             } else {
-                " [Space to focus]".to_string()
+                " [Space/Enter to focus]".to_string()
             };
             (
                 format!("{}{}{}", a.name, process_state_hint, focus_hint),
@@ -750,9 +750,9 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
                 let can_pause = app.selected_agent().map(|a| a.can_pause()).unwrap_or(true);
 
                 if can_pause {
-                    "j/k: nav │ Space: focus │ r: run │ s: stop │ p: pause │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
+                    "j/k: nav │ Space/Enter: focus │ r: run │ s: stop │ p: pause │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
                 } else {
-                    "j/k: nav │ Space: focus │ r: run │ s: stop │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
+                    "j/k: nav │ Space/Enter: focus │ r: run │ s: stop │ n: new │ i: msg │ d: delete │ ?: help │ q: quit".to_string()
                 }
             }
         }
@@ -775,14 +775,11 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
 fn render_input_box(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
-    // Use different sizes based on input mode - larger for prompts/instructions
-    let is_multiline_mode = matches!(
-        app.input_mode,
-        InputMode::EnteringPrompt | InputMode::EnteringInstruction
-    );
+    // Use different sizes based on input mode - larger for prompts
+    let is_multiline_mode = matches!(app.input_mode, InputMode::EnteringPrompt);
 
     let (box_width, box_height) = if is_multiline_mode {
-        // Larger box for prompts and instructions (70% width, up to 16 lines)
+        // Larger box for prompts (70% width, up to 16 lines)
         let w = (area.width * 70 / 100).max(60).min(area.width - 4);
         let h = 16.min(area.height - 4);
         (w, h)
@@ -812,13 +809,6 @@ fn render_input_box(frame: &mut Frame, app: &App) {
                 format!("New Agent - Step 3/3 ({} lines)", line_count)
             } else {
                 "New Agent - Step 3/3".to_string()
-            }
-        }
-        InputMode::EnteringInstruction => {
-            if line_count > 1 {
-                format!("Send Message ({} lines)", line_count)
-            } else {
-                "Send Message".to_string()
             }
         }
         InputMode::Normal => String::new(),
@@ -993,9 +983,9 @@ fn render_help_screen(frame: &mut Frame) {
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from("  j/k, ↑/↓    Navigate agents"),
-        Line::from("  Tab         Next agent / Unfocus terminal"),
-        Line::from("  Space       Focus terminal (type to interact)"),
-        Line::from("  Mouse wheel Scroll terminal (when focused)"),
+        Line::from("  Tab         Next agent (or focus if single) / Unfocus"),
+        Line::from("  Space/Enter Focus terminal (type to interact)"),
+        Line::from("  Mouse wheel Scroll terminal output"),
         Line::from(""),
         Line::from(Span::styled(
             "Agent Control",
@@ -1011,7 +1001,6 @@ fn render_help_screen(frame: &mut Frame) {
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from("  n           Create new agent"),
-        Line::from("  i           Send message to Claude"),
         Line::from("  d           Delete agent"),
         Line::from(""),
         Line::from(Span::styled(

@@ -54,16 +54,43 @@ pub enum LoopError {
     StdinWriteFailed(String),
 }
 
+use crate::agent::ProcessState;
+
 /// Raw terminal data from a ralph loop subprocess.
+/// Can be either output bytes or a state change notification.
 #[derive(Debug, Clone)]
-pub struct TerminalData {
-    pub agent_name: String,
-    pub data: Vec<u8>,
+pub enum TerminalData {
+    /// Raw PTY output to display in terminal
+    Output { agent_name: String, data: Vec<u8> },
+    /// State change event (Starting, Ready, Exiting, Exited, etc.)
+    StateChange { agent_name: String, state: ProcessState },
+    /// Iteration completed (ralph loop restarting)
+    IterationComplete { agent_name: String },
 }
 
 impl TerminalData {
+    /// Create an Output event (for backwards compatibility)
     pub fn new(agent_name: String, data: Vec<u8>) -> Self {
-        Self { agent_name, data }
+        Self::Output { agent_name, data }
+    }
+
+    /// Create a StateChange event
+    pub fn state_change(agent_name: String, state: ProcessState) -> Self {
+        Self::StateChange { agent_name, state }
+    }
+
+    /// Create an IterationComplete event
+    pub fn iteration_complete(agent_name: String) -> Self {
+        Self::IterationComplete { agent_name }
+    }
+
+    /// Get the agent name regardless of variant
+    pub fn agent_name(&self) -> &str {
+        match self {
+            Self::Output { agent_name, .. } => agent_name,
+            Self::StateChange { agent_name, .. } => agent_name,
+            Self::IterationComplete { agent_name } => agent_name,
+        }
     }
 }
 
@@ -315,12 +342,11 @@ impl RalphLoop {
         is_ralph_loop: bool,
         initial_size: (u16, u16),
     ) {
-        // Send starting marker on initial start (from stopped state)
-        // Uses OSC escape sequence to prevent false positives from Claude's output
+        // Send Starting state change on initial start (from stopped state)
         let _ = tx
-            .send(TerminalData::new(
+            .send(TerminalData::state_change(
                 agent_name.clone(),
-                b"\x1b]9999;starting\x07".to_vec(),
+                ProcessState::Starting,
             ))
             .await;
 
@@ -380,6 +406,11 @@ impl RalphLoop {
 
             // Ralph loops: announce restart and continue
             if !cancel_token.is_cancelled() && !paused.load(Ordering::SeqCst) {
+                // Signal that an iteration completed (for incrementing iteration counter)
+                let _ = tx
+                    .send(TerminalData::iteration_complete(agent_name.clone()))
+                    .await;
+
                 let _ = tx
                     .send(TerminalData::new(
                         agent_name.clone(),
@@ -389,12 +420,11 @@ impl RalphLoop {
 
                 tokio::time::sleep(Duration::from_secs(1)).await;
 
-                // Send starting marker to trigger process state transition
-                // Uses OSC escape sequence to prevent false positives from Claude's output
+                // Send Starting state change to trigger process state transition
                 let _ = tx
-                    .send(TerminalData::new(
+                    .send(TerminalData::state_change(
                         agent_name.clone(),
-                        b"\x1b]9999;starting\x07".to_vec(),
+                        ProcessState::Starting,
                     ))
                     .await;
             }
@@ -470,10 +500,9 @@ impl RalphLoop {
                 // Priority 1: Check for cancellation
                 _ = cancel_token.cancelled() => {
                     // Signal that we're in graceful exit phase
-                    // Uses OSC escape sequence to prevent false positives from Claude's output
-                    let _ = tx.send(TerminalData::new(
+                    let _ = tx.send(TerminalData::state_change(
                         agent_name.to_string(),
-                        b"\x1b]9999;exiting\x07".to_vec(),
+                        ProcessState::Exiting,
                     )).await;
 
                     // Graceful shutdown: send double Ctrl+C to exit Claude Code
@@ -564,6 +593,11 @@ impl RalphLoop {
                                 agent_name.to_string(),
                                 b"\r\n[Process exited]\r\n".to_vec(),
                             )).await;
+                            // Send Exited state for clean process exit
+                            let _ = tx.send(TerminalData::state_change(
+                                agent_name.to_string(),
+                                ProcessState::Exited,
+                            )).await;
                             break;
                         }
                         Ok(n) => {
@@ -582,6 +616,11 @@ impl RalphLoop {
                                 agent_name.to_string(),
                                 format!("\r\n[Read error: {}]\r\n", e).into_bytes(),
                             )).await;
+                            // Send Exited state for PTY closure
+                            let _ = tx.send(TerminalData::state_change(
+                                agent_name.to_string(),
+                                ProcessState::Exited,
+                            )).await;
                             break;
                         }
                     }
@@ -594,6 +633,11 @@ impl RalphLoop {
                         let _ = tx.send(TerminalData::new(
                             agent_name.to_string(),
                             format!("\r\n[Process exited with status: {}]\r\n", status).into_bytes(),
+                        )).await;
+                        // Send Exited state for clean process exit
+                        let _ = tx.send(TerminalData::state_change(
+                            agent_name.to_string(),
+                            ProcessState::Exited,
                         )).await;
                         break;
                     }

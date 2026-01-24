@@ -19,7 +19,6 @@ pub enum InputMode {
     EnteringPath,
     EnteringName,
     EnteringPrompt,
-    EnteringInstruction,
 }
 
 /// Search mode for Ctrl+F terminal search
@@ -493,22 +492,38 @@ impl App {
         self.last_tick = Instant::now();
 
         // Drain the terminal data channel and route to appropriate agents
+        let mut iteration_changed = false;
         while let Ok(term_data) = self.terminal_rx.try_recv() {
-            if let Some(agent) = self
-                .agents
-                .iter_mut()
-                .find(|a| a.name == term_data.agent_name)
-            {
-                agent.process_terminal_data(&term_data.data);
+            let agent_name = term_data.agent_name().to_string();
+            if let Some(agent) = self.agents.iter_mut().find(|a| a.name == agent_name) {
+                match term_data {
+                    TerminalData::Output { data, .. } => {
+                        agent.process_terminal_data(&data);
+                    }
+                    TerminalData::StateChange { state, .. } => {
+                        agent.handle_state_change(state);
+                    }
+                    TerminalData::IterationComplete { .. } => {
+                        agent.iteration += 1;
+                        iteration_changed = true;
+                    }
+                }
             }
+        }
+
+        // Save state if iteration changed
+        if iteration_changed {
+            self.save_state();
         }
 
         // Check for subprocess exits and update agent status accordingly
         let mut status_changed = false;
         for agent in &mut self.agents {
-            // If agent status is Running but subprocess is no longer running,
-            // the process has exited naturally (not killed by user)
-            if agent.status == AgentStatus::Running && !agent.is_subprocess_running() {
+            // If agent status is Running or Paused but subprocess is no longer running,
+            // the process has exited naturally (not killed by user, or killed while paused)
+            if (agent.status == AgentStatus::Running || agent.status == AgentStatus::Paused)
+                && !agent.is_subprocess_running()
+            {
                 agent.status = AgentStatus::Stopped;
                 agent.start_time = None;
                 agent.process_state = crate::agent::ProcessState::Stopped;
@@ -611,22 +626,6 @@ impl App {
         self.pending_agent_name = None;
     }
 
-    pub fn start_instruction(&mut self) {
-        if let Some(agent) = self.selected_agent() {
-            if agent.agent_dir.is_none() {
-                self.status_message = Some("No project path for this agent".to_string());
-                return;
-            }
-        } else {
-            self.status_message = Some("No agent selected".to_string());
-            return;
-        }
-
-        self.input_mode = InputMode::EnteringInstruction;
-        self.input_buffer.clear();
-        self.paste_info = None;
-    }
-
     fn submit_input(&mut self) {
         match self.input_mode {
             InputMode::Normal => {}
@@ -679,9 +678,6 @@ impl App {
             }
             InputMode::EnteringPrompt => {
                 self.create_loop_from_input();
-            }
-            InputMode::EnteringInstruction => {
-                self.submit_instruction();
             }
         }
     }
@@ -760,58 +756,12 @@ impl App {
         self.input_mode = InputMode::Normal;
     }
 
-    fn submit_instruction(&mut self) {
-        let instruction_text = self.input_buffer.trim().to_string();
-
-        if instruction_text.is_empty() {
-            self.status_message = Some("Instruction cannot be empty".to_string());
-            self.input_buffer.clear();
-            self.input_mode = InputMode::Normal;
-            return;
-        }
-
-        // Send directly to the agent's PTY if running
-        if let Some(agent) = self.selected_agent() {
-            if agent.status == AgentStatus::Running {
-                if let Err(e) = agent.send_input(instruction_text.as_bytes()) {
-                    self.status_message = Some(format!("Failed to send: {}", e));
-                } else {
-                    // Also send newline
-                    let _ = agent.send_input(b"\n");
-                    self.status_message = Some("Instruction sent to Claude".to_string());
-                }
-            } else {
-                // Fall back to writing to file if not running
-                if let Some(ref path) = agent.agent_dir {
-                    match RalphProject::from_path(path.clone()) {
-                        Ok(project) => match project.append_instruction(&instruction_text) {
-                            Ok(()) => {
-                                self.status_message = Some("Instruction saved to file".to_string());
-                            }
-                            Err(e) => {
-                                self.status_message =
-                                    Some(format!("Failed to write instruction: {}", e));
-                            }
-                        },
-                        Err(e) => {
-                            self.status_message = Some(format!("Failed to load project: {}", e));
-                        }
-                    }
-                }
-            }
-        }
-
-        self.input_buffer.clear();
-        self.input_mode = InputMode::Normal;
-    }
-
     pub fn input_prompt(&self) -> &str {
         match self.input_mode {
             InputMode::Normal => "",
             InputMode::EnteringPath => "Target repo path: ",
             InputMode::EnteringName => "Agent name: ",
             InputMode::EnteringPrompt => "Prompt (optional): ",
-            InputMode::EnteringInstruction => "Message to Claude: ",
         }
     }
 
@@ -966,12 +916,16 @@ impl App {
                     self.show_help = true;
                     true
                 }
-                KeyCode::Char(' ') => {
+                KeyCode::Char(' ') | KeyCode::Enter => {
                     self.toggle_focus();
                     true
                 }
                 KeyCode::Tab => {
-                    self.select_next();
+                    if self.agents.len() == 1 {
+                        self.output_focused = true;
+                    } else {
+                        self.select_next();
+                    }
                     true
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
@@ -1009,10 +963,6 @@ impl App {
                 }
                 KeyCode::Char('n') => {
                     self.start_new_loop();
-                    true
-                }
-                KeyCode::Char('i') => {
-                    self.start_instruction();
                     true
                 }
                 KeyCode::Char('d') => {

@@ -9,6 +9,7 @@ use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -35,6 +36,8 @@ pub enum ProcessState {
     Stopping,
     /// Sent Ctrl+C, waiting for graceful exit (cleanup sequences)
     Exiting,
+    /// Process exited naturally (Claude finished or process ended)
+    Exited,
     /// Process is not running
     #[default]
     Stopped,
@@ -104,12 +107,12 @@ impl AgentStatus {
 /// Terminal size for the embedded terminal
 pub const TERM_COLS: u16 = 180;
 pub const TERM_ROWS: u16 = 40;
-/// Scrollback buffer size in lines (~100K lines for unlimited history)
-pub const SCROLLBACK_SIZE: usize = 100_000;
+/// Scrollback buffer size in lines (5K lines per agent)
+pub const SCROLLBACK_SIZE: usize = 5_000;
 /// Maximum number of search matches to collect (prevents unbounded memory growth)
 pub const MAX_SEARCH_MATCHES: usize = 10_000;
-/// Maximum raw history size in memory (2MB) - older data is trimmed
-const MAX_RAW_HISTORY_BYTES: usize = 2 * 1024 * 1024;
+/// Maximum raw history size in memory (512KB) - enough for ~5K lines at ~100 bytes/line
+const MAX_RAW_HISTORY_BYTES: usize = 512 * 1024;
 
 /// Filter out mouse escape sequences that may leak from PTY
 /// Handles multiple mouse protocols:
@@ -195,6 +198,8 @@ pub struct Agent {
     history_loaded: bool,
     /// Raw PTY data kept in memory for instant re-wrapping on resize
     raw_history: Vec<u8>,
+    /// Generation counter for resize debouncing - incremented on each resize
+    resize_generation: Arc<AtomicU64>,
 }
 
 impl Agent {
@@ -219,6 +224,7 @@ impl Agent {
             history_file: None,
             history_loaded: true, // No project = no history to load
             raw_history: Vec::new(),
+            resize_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -254,6 +260,7 @@ impl Agent {
             history_file,
             history_loaded: false, // Will load on first resize
             raw_history: Vec::new(),
+            resize_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -354,23 +361,18 @@ impl Agent {
         }
     }
 
-    /// Marker sent by loop_manager when a new Claude iteration is about to start
-    /// Uses a unique prefix to prevent false positives from Claude's output
-    const STARTING_MARKER: &'static [u8] = b"\x1b]9999;starting\x07";
-    /// Marker sent by loop_manager when graceful shutdown begins
-    /// Uses a unique prefix to prevent false positives from Claude's output
-    const EXITING_MARKER: &'static [u8] = b"\x1b]9999;exiting\x07";
     /// Patterns that indicate Claude Code is ready for input
     const READY_INDICATORS: &'static [&'static [u8]] = &[
         "❯".as_bytes(), // Claude's prompt character
         b"Claude Code", // Banner text
     ];
 
-    /// Process raw terminal data from the PTY
-    pub fn process_terminal_data(&mut self, data: &[u8]) {
-        // If agent is already stopped/stopping, ignore late-arriving data from the channel.
-        // This prevents race conditions where [Exiting...] marker arrives after stop() has
-        // already set the state to Stopped, which would incorrectly show "(exiting...)" in UI.
+    /// Handle an explicit state change event from loop_manager.
+    /// This replaces the old marker-based state detection.
+    pub fn handle_state_change(&mut self, new_state: ProcessState) {
+        // If agent is already stopped/stopping, ignore late-arriving state changes.
+        // This prevents race conditions where state changes arrive after stop() has
+        // already set the state to Stopped.
         if matches!(
             self.process_state,
             ProcessState::Stopped | ProcessState::Stopping
@@ -378,27 +380,61 @@ impl Agent {
             return;
         }
 
-        // Check for exiting marker (graceful shutdown in progress)
-        let contains_exiting_marker = data
-            .windows(Self::EXITING_MARKER.len())
-            .any(|w| w == Self::EXITING_MARKER);
+        match new_state {
+            ProcessState::Exiting => {
+                // Graceful shutdown in progress - block input
+                self.process_state = ProcessState::Exiting;
+            }
+            ProcessState::Starting => {
+                // New iteration starting - block input until Ready
+                self.process_state = ProcessState::Starting;
+            }
+            ProcessState::Exited => {
+                // Process exited naturally
+                self.process_state = ProcessState::Exited;
 
-        if contains_exiting_marker {
-            self.process_state = ProcessState::Exiting;
-            // Don't write the marker to history or terminal - it's internal
+                // Update AgentStatus to Stopped in these cases:
+                // 1. Claude instances - they don't auto-restart
+                // 2. Agent was paused when process exited (e.g., user Ctrl+C'd a paused agent)
+                //    The user explicitly killed it, so treat as a stop
+                if self.agent_type == AgentType::ClaudeInstance
+                    || self.status == AgentStatus::Paused
+                {
+                    // Stop the ralph_loop task before clearing the reference
+                    if let Some(ref mut ralph_loop) = self.ralph_loop {
+                        ralph_loop.stop();
+                    }
+                    self.ralph_loop = None;
+                    self.status = AgentStatus::Stopped;
+                    self.start_time = None;
+                    self.process_state = ProcessState::Stopped;
+                }
+                // For running ralph loops, the loop will restart automatically
+            }
+            ProcessState::Ready => {
+                // Explicitly set ready (could be sent by loop_manager in future)
+                self.process_state = ProcessState::Ready;
+            }
+            ProcessState::Stopping | ProcessState::Stopped => {
+                // These are managed by stop() method, not via events
+                self.process_state = new_state;
+            }
+        }
+    }
+
+    /// Process raw terminal data from the PTY
+    pub fn process_terminal_data(&mut self, data: &[u8]) {
+        // If agent is already stopped/stopping, ignore late-arriving data from the channel.
+        if matches!(
+            self.process_state,
+            ProcessState::Stopped | ProcessState::Stopping
+        ) {
             return;
         }
 
-        // Check for restart transition marker from ralph loop
-        // When detected, set Starting state to block input until new Claude instance is ready
-        let contains_starting_marker = data
-            .windows(Self::STARTING_MARKER.len())
-            .any(|w| w == Self::STARTING_MARKER);
-
-        if contains_starting_marker {
-            self.process_state = ProcessState::Starting;
-        } else if self.process_state == ProcessState::Starting {
-            // Transition to Ready when we see Claude Code output (prompt or banner)
+        // Transition to Ready when we see Claude Code output (prompt or banner)
+        // This auto-detects readiness from terminal output
+        if self.process_state == ProcessState::Starting {
             let contains_ready_indicator = Self::READY_INDICATORS
                 .iter()
                 .any(|indicator| data.windows(indicator.len()).any(|w| w == *indicator));
@@ -524,6 +560,10 @@ impl Agent {
             // Width change: re-render content for proper wrapping
             // Height-only change: just resize vt100 parser (no content re-render)
             if width_changed && self.history_loaded && !self.raw_history.is_empty() {
+                // Increment generation to invalidate any in-flight background renders
+                let generation = self.resize_generation.fetch_add(1, Ordering::SeqCst) + 1;
+
+                // Step 1: Quick render of last 10KB for immediate display (no black screen)
                 const RECENT_BYTES: usize = 10 * 1024;
                 let start = self.raw_history.len().saturating_sub(RECENT_BYTES);
                 let recent = &self.raw_history[start..];
@@ -534,6 +574,23 @@ impl Agent {
                 if let Ok(mut term) = self.terminal.lock() {
                     *term = new_term;
                 }
+
+                // Step 2: Spawn background task to render full history, then swap it in
+                // Only swaps if no new resize has occurred (generation still matches)
+                let raw_history_clone = self.raw_history.clone();
+                let terminal_clone = self.terminal.clone();
+                let generation_clone = self.resize_generation.clone();
+                std::thread::spawn(move || {
+                    let mut full_term = vt100::Parser::new(rows, cols, SCROLLBACK_SIZE);
+                    full_term.process(&raw_history_clone);
+
+                    // Only swap if generation hasn't changed (no new resize started)
+                    if generation_clone.load(Ordering::SeqCst) == generation {
+                        if let Ok(mut term) = terminal_clone.lock() {
+                            *term = full_term;
+                        }
+                    }
+                });
             } else {
                 // Height-only or no history: just resize the parser
                 if let Ok(mut term) = self.terminal.lock() {

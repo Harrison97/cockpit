@@ -1,6 +1,4 @@
-use chrono::Local;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Represents a ralph project directory structure.
@@ -20,9 +18,6 @@ pub struct RalphProject {
 
     /// Path to specs/ directory
     pub specs_dir: PathBuf,
-
-    /// Path to PRIORITY_INSTRUCTIONS.md
-    pub instructions_path: PathBuf,
 }
 
 #[allow(dead_code)]
@@ -30,7 +25,7 @@ impl RalphProject {
     /// Open an existing ralph project from a directory path.
     ///
     /// Verifies that the path is a directory and that PROMPT.md exists.
-    /// Other files (plan, specs, instructions) may not exist yet.
+    /// Other files (plan, specs) may not exist yet.
     pub fn from_path(path: PathBuf) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         // Verify path is a directory
         if !path.is_dir() {
@@ -50,14 +45,12 @@ impl RalphProject {
         // Set paths for other files (may not exist yet)
         let plan_path = path.join("IMPLEMENTATION_PLAN.md");
         let specs_dir = path.join("specs");
-        let instructions_path = path.join("PRIORITY_INSTRUCTIONS.md");
 
         Ok(Self {
             root: path,
             prompt_path,
             plan_path,
             specs_dir,
-            instructions_path,
         })
     }
 
@@ -102,40 +95,12 @@ impl RalphProject {
         let specs_dir = path.join("specs");
         fs::create_dir_all(&specs_dir)?;
 
-        let instructions_path = path.join("PRIORITY_INSTRUCTIONS.md");
-
         Ok(Self {
             root: path,
             prompt_path,
             plan_path,
             specs_dir,
-            instructions_path,
         })
-    }
-
-    /// Append an instruction for the next iteration.
-    ///
-    /// Creates PRIORITY_INSTRUCTIONS.md if it doesn't exist, then appends
-    /// a timestamped instruction entry.
-    pub fn append_instruction(
-        &self,
-        text: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.instructions_path)?;
-
-        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
-
-        writeln!(file, "## [{timestamp}]")?;
-        writeln!(file)?;
-        writeln!(file, "{text}")?;
-        writeln!(file)?;
-        writeln!(file, "---")?;
-        writeln!(file)?;
-
-        Ok(())
     }
 
     /// Add a high-priority task to the plan.

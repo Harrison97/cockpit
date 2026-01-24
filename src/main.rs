@@ -200,14 +200,10 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
 
                     match mouse.kind {
                         MouseEventKind::ScrollUp => {
-                            if app.output_focused {
-                                scroll_delta += 3;
-                            }
+                            scroll_delta += 3;
                         }
                         MouseEventKind::ScrollDown => {
-                            if app.output_focused {
-                                scroll_delta -= 3;
-                            }
+                            scroll_delta -= 3;
                         }
                         MouseEventKind::Down(MouseButton::Left) if !shift_held => {
                             // Start selection on left click (without shift)
