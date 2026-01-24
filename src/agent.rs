@@ -195,6 +195,8 @@ pub struct Agent {
     history_loaded: bool,
     /// Raw PTY data kept in memory for instant re-wrapping on resize
     raw_history: Vec<u8>,
+    /// Timestamp when Starting state began (for timeout detection)
+    starting_since: Option<Instant>,
 }
 
 impl Agent {
@@ -219,6 +221,7 @@ impl Agent {
             history_file: None,
             history_loaded: true, // No project = no history to load
             raw_history: Vec::new(),
+            starting_since: None,
         }
     }
 
@@ -254,6 +257,7 @@ impl Agent {
             history_file,
             history_loaded: false, // Will load on first resize
             raw_history: Vec::new(),
+            starting_since: None,
         }
     }
 
@@ -387,6 +391,7 @@ impl Agent {
 
         if contains_starting_marker {
             self.process_state = ProcessState::Starting;
+            self.starting_since = Some(Instant::now());
             // Don't transition to Ready yet - the starting marker itself doesn't count
             // as real Claude output. Wait for actual output from the new instance.
         } else if self.process_state == ProcessState::Starting {
@@ -396,8 +401,17 @@ impl Agent {
             let contains_ready_indicator = Self::READY_INDICATORS
                 .iter()
                 .any(|indicator| data.windows(indicator.len()).any(|w| w == *indicator));
-            if contains_ready_indicator {
+
+            // Check for timeout: if stuck in Starting for >30s, auto-transition to Ready
+            // This prevents permanent freeze if Claude never outputs the prompt character
+            let timed_out = self
+                .starting_since
+                .map(|t| t.elapsed().as_secs() >= 30)
+                .unwrap_or(false);
+
+            if contains_ready_indicator || timed_out {
                 self.process_state = ProcessState::Ready;
+                self.starting_since = None;
             }
         }
 
@@ -593,6 +607,7 @@ impl Agent {
 
         // Set process state to Starting before spawning
         self.process_state = ProcessState::Starting;
+        self.starting_since = Some(Instant::now());
 
         if let Some(ref agent_dir) = self.agent_dir {
             let working_dir = self
@@ -615,6 +630,7 @@ impl Agent {
                     Err(e) => {
                         if !Self::is_transient_error(&e) {
                             self.process_state = ProcessState::Stopped;
+                            self.starting_since = None;
                             return Err(e.into());
                         }
                         last_error = Some(e);
@@ -629,6 +645,7 @@ impl Agent {
             }
 
             self.process_state = ProcessState::Stopped;
+            self.starting_since = None;
             return Err(last_error
                 .map(AgentError::from)
                 .unwrap_or_else(|| AgentError::InvalidState("Spawn failed".into())));
@@ -662,6 +679,7 @@ impl Agent {
     pub fn stop(&mut self) {
         // Set process state to Stopping during shutdown
         self.process_state = ProcessState::Stopping;
+        self.starting_since = None;
 
         if let Some(ref mut ralph_loop) = self.ralph_loop {
             ralph_loop.stop();

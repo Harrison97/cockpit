@@ -14,7 +14,7 @@ Agents appear frozen because `send_input()` silently drops ALL keyboard input wh
 - **Note**: Still block input during `Stopping` and `Exiting` to allow graceful shutdown sequences
 
 ### 2. Add Timeout for Stuck Starting State
-- [ ] **Task**: Add a timeout mechanism that transitions from `Starting` to `Ready` after 30 seconds
+- [x] **Task**: Add a timeout mechanism that transitions from `Starting` to `Ready` after 30 seconds
 - **File**: `src/agent.rs`
 - **Change**: Track when `Starting` state began. In `process_terminal_data()`, if in `Starting` for >30s without seeing ready indicator, auto-transition to `Ready`
 - **Rationale**: Prevents permanent freeze if Claude never outputs the prompt character
