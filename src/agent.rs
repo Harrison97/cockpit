@@ -9,7 +9,6 @@ use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -198,8 +197,6 @@ pub struct Agent {
     history_loaded: bool,
     /// Raw PTY data kept in memory for instant re-wrapping on resize
     raw_history: Vec<u8>,
-    /// Generation counter for resize debouncing - incremented on each resize
-    resize_generation: Arc<AtomicU64>,
 }
 
 impl Agent {
@@ -224,7 +221,6 @@ impl Agent {
             history_file: None,
             history_loaded: true, // No project = no history to load
             raw_history: Vec::new(),
-            resize_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -260,7 +256,6 @@ impl Agent {
             history_file,
             history_loaded: false, // Will load on first resize
             raw_history: Vec::new(),
-            resize_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -557,40 +552,15 @@ impl Agent {
                 self.scroll_offset = 0;
             }
 
-            // Width change: re-render content for proper wrapping
+            // Width change: re-render full content for proper wrapping
             // Height-only change: just resize vt100 parser (no content re-render)
             if width_changed && self.history_loaded && !self.raw_history.is_empty() {
-                // Increment generation to invalidate any in-flight background renders
-                let generation = self.resize_generation.fetch_add(1, Ordering::SeqCst) + 1;
-
-                // Step 1: Quick render of last 10KB for immediate display (no black screen)
-                const RECENT_BYTES: usize = 10 * 1024;
-                let start = self.raw_history.len().saturating_sub(RECENT_BYTES);
-                let recent = &self.raw_history[start..];
-
                 let mut new_term = vt100::Parser::new(rows, cols, SCROLLBACK_SIZE);
-                new_term.process(recent);
+                new_term.process(&self.raw_history);
 
                 if let Ok(mut term) = self.terminal.lock() {
                     *term = new_term;
                 }
-
-                // Step 2: Spawn background task to render full history, then swap it in
-                // Only swaps if no new resize has occurred (generation still matches)
-                let raw_history_clone = self.raw_history.clone();
-                let terminal_clone = self.terminal.clone();
-                let generation_clone = self.resize_generation.clone();
-                std::thread::spawn(move || {
-                    let mut full_term = vt100::Parser::new(rows, cols, SCROLLBACK_SIZE);
-                    full_term.process(&raw_history_clone);
-
-                    // Only swap if generation hasn't changed (no new resize started)
-                    if generation_clone.load(Ordering::SeqCst) == generation {
-                        if let Ok(mut term) = terminal_clone.lock() {
-                            *term = full_term;
-                        }
-                    }
-                });
             } else {
                 // Height-only or no history: just resize the parser
                 if let Ok(mut term) = self.terminal.lock() {
