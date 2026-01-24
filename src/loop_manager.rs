@@ -142,11 +142,9 @@ fn is_claude_installed() -> bool {
         .unwrap_or(false)
 }
 
-/// How long to wait with no output before considering Claude "idle"
-/// Set to 5 minutes - Claude often thinks for extended periods while reading files,
-/// processing code, or waiting for tool responses. A shorter timeout causes
-/// premature restarts and input blocking (ProcessState stuck on Exiting).
-const IDLE_TIMEOUT_SECS: u64 = 300;
+/// How long to wait with no output before considering Claude "idle" and restarting.
+/// 2 seconds works now that marker detection uses OSC escape sequences (no false positives).
+const IDLE_TIMEOUT_SECS: u64 = 2;
 
 /// Commands sent to the PTY management task
 #[derive(Debug)]
