@@ -375,6 +375,16 @@ impl Agent {
 
     /// Process raw terminal data from the PTY
     pub fn process_terminal_data(&mut self, data: &[u8]) {
+        // If agent is already stopped/stopping, ignore late-arriving data from the channel.
+        // This prevents race conditions where [Exiting...] marker arrives after stop() has
+        // already set the state to Stopped, which would incorrectly show "(exiting...)" in UI.
+        if matches!(
+            self.process_state,
+            ProcessState::Stopped | ProcessState::Stopping
+        ) {
+            return;
+        }
+
         // Check for exiting marker (graceful shutdown in progress)
         let contains_exiting_marker = data
             .windows(Self::EXITING_MARKER.len())
