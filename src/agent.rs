@@ -686,6 +686,13 @@ impl Agent {
         self.process_state = ProcessState::Stopping;
         self.starting_since = None;
 
+        // If paused, resume first so the process can respond to Ctrl+C during graceful shutdown
+        if self.status == AgentStatus::Paused {
+            if let Some(ref mut ralph_loop) = self.ralph_loop {
+                let _ = ralph_loop.resume();
+            }
+        }
+
         if let Some(ref mut ralph_loop) = self.ralph_loop {
             ralph_loop.stop();
         }

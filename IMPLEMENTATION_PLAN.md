@@ -284,6 +284,11 @@
   - Set state to `Ready` when new Claude prompt appears
   - This prevents keystrokes from bleeding into next Claude instance
 
+- [x] **12.4 Fix paused agent stop freeze**
+  - When stopping a paused agent, resume (SIGCONT) first
+  - Otherwise process can't respond to Ctrl+C during graceful shutdown
+  - Agent would get stuck in "exiting" state forever
+
 ## Phase 13: Unlimited Scrollback History
 
 - [x] **13.1 Increase vt100 scrollback buffer**
