@@ -2,29 +2,7 @@
 
 A UI to Pilot AI Agents
 
-````
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ COCKPIT                                                          14:32:07   │
-├───────────────────────┬─────────────────────────────────────────────────────┤
-│ Agents                │ Agent Output: architect                             │
-│                       │                                                     │
-│ ▶ architect           │  Looking at the codebase structure...               │
-│   ● RUNNING           │                                                     │
-│   iter #23            │  I'll refactor the auth module to use the new       │
-│   [loop]              │  token validation pattern we established.           │
-│                       │                                                     │
-│   builder             │  ```typescript                                      │
-│   ◐ PAUSED            │  export class AuthService {                         │
-│   iter #8             │    constructor(private tokenValidator: Validator)   │
-│   [loop]              │  }                                                  │
-│                       │  ```                                                │
-│   scratch             │                                                     │
-│   ○ STOPPED           │  ✓ feat(auth): refactor to dependency injection     │
-│   [claude]            │                                                     │
-├───────────────────────┴─────────────────────────────────────────────────────┤
-│ j/k: nav │ r: run │ s: stop │ p: pause │ n: new │ i: import │ ?: help       │
-└─────────────────────────────────────────────────────────────────────────────┘
-````
+![alt text](assets/ui.png)
 
 ## The Idea
 
