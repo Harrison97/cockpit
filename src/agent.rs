@@ -443,19 +443,33 @@ impl Agent {
         if let Some(ref mut file) = self.history_file {
             // Write the raw bytes (before filtering) to preserve full history
             let _ = file.write_all(data);
-            // Flush periodically isn't needed - OS buffers and we don't need real-time sync
+            // Flush to ensure data is written to disk, protecting against crashes
+            let _ = file.flush();
         }
 
         // Filter out mouse escape sequences that may leak from PTY
         let filtered = filter_mouse_sequences(data);
 
         // Store filtered data in raw_history for instant re-wrapping on resize
-        self.raw_history.extend_from_slice(&filtered);
-        // Trim if exceeding max size (keep the most recent data)
-        if self.raw_history.len() > MAX_RAW_HISTORY_BYTES {
-            let trim_at = self.raw_history.len() - MAX_RAW_HISTORY_BYTES;
-            self.raw_history.drain(0..trim_at);
+        // Trim before extending to prevent memory spikes above the limit
+        let new_len = self.raw_history.len() + filtered.len();
+        if new_len > MAX_RAW_HISTORY_BYTES {
+            let trim_at = new_len - MAX_RAW_HISTORY_BYTES;
+            if trim_at < self.raw_history.len() {
+                self.raw_history.drain(0..trim_at);
+            } else {
+                // New data alone exceeds limit - keep only the tail of new data
+                self.raw_history.clear();
+                let start = filtered.len() - MAX_RAW_HISTORY_BYTES;
+                self.raw_history.extend_from_slice(&filtered[start..]);
+                // Early return to avoid double-extending below
+                if let Ok(mut term) = self.terminal.lock() {
+                    term.process(&filtered[start..]);
+                }
+                return;
+            }
         }
+        self.raw_history.extend_from_slice(&filtered);
 
         if let Ok(mut term) = self.terminal.lock() {
             // If scrolled up, track how many new lines are added to maintain position

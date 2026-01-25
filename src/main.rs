@@ -107,9 +107,11 @@ async fn main() -> io::Result<()> {
     let shutdown_flag = Arc::new(&SHUTDOWN_REQUESTED);
     tokio::spawn(async move {
         let mut sigint =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).unwrap();
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                .expect("Failed to create SIGINT handler");
         let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("Failed to create SIGTERM handler");
 
         tokio::select! {
             _ = sigint.recv() => {},

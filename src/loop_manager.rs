@@ -471,9 +471,12 @@ impl RalphLoop {
         let cmd_str = if is_ralph_loop {
             let prompt_path = agent_dir.join("PROMPT.md");
             let prompt_path_str = prompt_path.to_string_lossy();
+            // Properly escape single quotes in the path to prevent shell injection
+            // Replace each ' with '\'' which closes the quote, adds a literal ', and reopens the quote
+            let escaped_path = prompt_path_str.replace('\'', r"'\''");
             format!(
                 "cat '{}' | claude --dangerously-skip-permissions",
-                prompt_path_str
+                escaped_path
             )
         } else {
             "claude --dangerously-skip-permissions".to_string()
