@@ -8,6 +8,8 @@
 //!   .cockpit/logs/      - timestamped log files
 //!   .cockpit/state.json - persisted application state
 
+// Allow dead_code for serialization structures that may have unused fields
+// required for backward compatibility with older state files
 #![allow(dead_code)]
 
 use crate::agent::AgentType;

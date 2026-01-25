@@ -1,5 +1,7 @@
 //! UI rendering module for the God Agent Console
 
+// Allow dead_code for UI components that may be conditionally rendered
+// or used in different modes/themes in future versions
 #![allow(dead_code)]
 
 use chrono::Local;

@@ -1,5 +1,7 @@
 //! Agent data model for the God Agent Console
 
+// Allow dead_code for public API methods that may be used by future features
+// or external integrations. This prevents warnings while keeping the API stable.
 #![allow(dead_code)]
 
 use crate::loop_manager::{LoopError, RalphLoop, TerminalData};

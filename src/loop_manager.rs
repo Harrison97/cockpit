@@ -1,4 +1,7 @@
+// Allow dead_code for public API methods and internal utilities that may be
+// used in future features. This maintains a clean public interface.
 #![allow(dead_code)]
+// Some functions naturally require many parameters for clarity and explicitness
 #![allow(clippy::too_many_arguments)]
 
 use pty_process::{open as open_pty, Command as PtyCommand, Size};

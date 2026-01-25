@@ -1,5 +1,6 @@
 //! Application state for the God Agent Console
 
+// Allow dead_code to maintain public API surface for future extensibility
 #![allow(dead_code)]
 
 use crate::agent::{Agent, AgentStatus, AgentType};
