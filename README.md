@@ -31,7 +31,15 @@ Cockpit gives you a workspace to run these loops, observe them, and iterate on t
 ```bash
 git clone https://github.com/Harrison97/cockpit
 cd cockpit
-cargo build --release
+make release
+make install   # installs to /usr/local/bin
+cockpit
+```
+
+Or build without installing:
+
+```bash
+make release
 ./target/release/cockpit
 ```
 
@@ -94,10 +102,25 @@ You can pause a running agent, edit its prompt, and resume. You can point an age
 
 How far this goes is up to you.
 
+## Example: Research Agent
+
+See `gastown.md` for an example of a long-running research agent. It maintains structured beliefs, tracks hypotheses, and iterates toward product clarity — all without writing code.
+
+Create it:
+
+1. Press `n`, point it at this repo
+2. Paste the contents of `gastown.md` as the prompt
+3. Press `r` to run
+
+It will loop indefinitely, refining its understanding each iteration.
+
 ---
 
 ```bash
-cargo build --release
+make build            # debug build
+make release          # release build
+make install          # install to /usr/local/bin
+make uninstall        # remove from /usr/local/bin
 cargo test
 COCKPIT_LOG=debug cargo run  # verbose logging
 ```
