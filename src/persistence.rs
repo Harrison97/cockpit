@@ -49,7 +49,7 @@ pub struct LoopState {
     pub name: String,
     /// The agent's config directory (.cockpit/agents/<name>) where PROMPT.md and history.log live
     pub agent_dir: PathBuf,
-    /// The working directory where Claude Code runs (the repo root)
+    /// The working directory where the CLI runs (the repo root)
     #[serde(default)]
     pub working_dir: Option<PathBuf>,
     pub last_iteration: u32,

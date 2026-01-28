@@ -315,7 +315,7 @@ fn render_agent_list(
 
         // Line 4: Type indicator or iteration count
         let type_text = match agent.agent_type {
-            AgentType::ClaudeInstance => "  Claude Instance".to_string(),
+            AgentType::ClaudeInstance => "  Single Session".to_string(),
             AgentType::RalphLoop => format!("  Loop: #{}", agent.iteration),
         };
         let type_style = if is_selected {
@@ -1093,7 +1093,7 @@ fn render_import_selection(frame: &mut Frame, agents: &[ImportableAgent], select
 
         let type_indicator = match agent.agent_type {
             AgentType::RalphLoop => "[loop]",
-            AgentType::ClaudeInstance => "[claude]",
+            AgentType::ClaudeInstance => "[session]",
         };
 
         let style = if is_selected {
@@ -1216,7 +1216,7 @@ fn render_help_screen(frame: &mut Frame) {
         key_line("r", "Run agent (or resume if paused)"),
         key_line("s", "Stop agent (kills session)"),
         key_line("p", "Pause agent (ralph loops only)"),
-        key_line("Ctrl+C", "Interrupt Claude (when terminal focused)"),
+        key_line("Ctrl+C", "Interrupt session (when terminal focused)"),
         Line::from(""),
         section("Agent Management"),
         key_line("n", "Create new agent"),

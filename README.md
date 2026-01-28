@@ -14,7 +14,9 @@ while true; do
 done
 ```
 
-Give Claude a task, let it work, let it finish, repeat. This primitive scales further than you'd expect.
+Give an agent a task, let it work, let it finish, repeat. This primitive scales further than you'd expect.
+
+(Using Codex? Swap the command for `cat PROMPT.md | codex exec -`.)
 
 Cockpit gives you a workspace to run these loops, observe them, and iterate on them.
 
@@ -23,7 +25,9 @@ Cockpit gives you a workspace to run these loops, observe them, and iterate on t
 ### Prerequisites
 
 - [Rust](https://rustup.rs/)
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — `npm install -g @anthropic-ai/claude-code`
+- Claude Code CLI (`claude`) or OpenAI Codex CLI (`codex`)
+  - Claude: `npm install -g @anthropic-ai/claude-code`
+  - Codex: `npm install -g @openai/codex`
 - macOS or Linux
 
 ### Install
@@ -48,17 +52,17 @@ make release
 1. Press `n`
 2. Enter the path to a codebase
 3. Name it
-4. Enter a prompt — or leave empty for a plain Claude session
+4. Enter a prompt — or leave empty for a plain CLI session
 
 Press `r` to run. Press `Space` to focus the terminal.
 
 ## Two Modes
 
-**Claude Instances** — Leave the prompt empty. You get a standard Claude Code session. Useful for quick tasks or when you want to drive.
+**Single Sessions** — Leave the prompt empty. You get a standard CLI session. Useful for quick tasks or when you want to drive.
 
-**Ralph Loops** — Enter a prompt. Claude works until it commits or says it's done, then restarts. Useful for larger tasks that benefit from iteration.
+**Ralph Loops** — Enter a prompt. The agent works until it commits or says it's done, then restarts. Useful for larger tasks that benefit from iteration.
 
-Even if you never touch Ralph loops, running one or two Claude sessions in cockpit beats wrestling with them in a normal terminal. Scrollback that actually works, pause and resume, persistent history, clean switching between sessions.
+Even if you never touch Ralph loops, running one or two CLI sessions in cockpit beats wrestling with them in a normal terminal. Scrollback that actually works, pause and resume, persistent history, clean switching between sessions.
 
 ## Controls
 
@@ -99,6 +103,17 @@ History persists. Close cockpit, reopen it, scroll back through what happened.
 The prompt is the agent. A well-crafted one can do more than you'd think.
 
 You can pause a running agent, edit its prompt, and resume. You can point an agent at cockpit itself. You can use agents to build other agents.
+
+## CLI Selection
+
+Cockpit can run either Claude or Codex. By default it picks Claude if installed, otherwise Codex.
+
+Set the provider explicitly with:
+
+```bash
+COCKPIT_CLI=claude cockpit
+COCKPIT_CLI=codex cockpit
+```
 
 How far this goes is up to you.
 

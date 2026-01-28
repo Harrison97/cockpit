@@ -41,11 +41,14 @@ pub enum LoopError {
     #[error("Failed to resume: {0}")]
     ResumeFailed(String),
 
-    #[error("Cannot pause Claude instances (only ralph loops can be paused)")]
+    #[error("Cannot pause single sessions (only ralph loops can be paused)")]
     PauseNotSupported,
 
-    #[error("Claude CLI not found. Install it with: npm install -g @anthropic-ai/claude-code")]
-    ClaudeNotFound,
+    #[error("{0}")]
+    CliNotFound(String),
+
+    #[error("Invalid CLI selection: {0}. Use COCKPIT_CLI=claude|codex|auto")]
+    InvalidCli(String),
 
     #[error("PTY error: {0}")]
     PtyError(String),
@@ -164,15 +167,70 @@ impl IterationDetector {
     }
 }
 
-fn is_claude_installed() -> bool {
+fn is_cli_installed(bin: &str) -> bool {
     std::process::Command::new("which")
-        .arg("claude")
+        .arg(bin)
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
 }
 
-/// How long to wait with no output before considering Claude "idle" and restarting.
+fn is_claude_installed() -> bool {
+    is_cli_installed("claude")
+}
+
+fn is_codex_installed() -> bool {
+    is_cli_installed("codex")
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CliProvider {
+    Claude,
+    Codex,
+}
+
+fn resolve_cli_provider() -> Result<CliProvider, LoopError> {
+    let choice = std::env::var("COCKPIT_CLI").unwrap_or_else(|_| "auto".to_string());
+    let choice = choice.trim().to_lowercase();
+
+    match choice.as_str() {
+        "" | "auto" => {
+            if is_claude_installed() {
+                Ok(CliProvider::Claude)
+            } else if is_codex_installed() {
+                Ok(CliProvider::Codex)
+            } else {
+                Err(LoopError::CliNotFound(
+                    "No supported CLI found. Install either Claude Code (claude) or Codex (codex)."
+                        .to_string(),
+                ))
+            }
+        }
+        "claude" => {
+            if is_claude_installed() {
+                Ok(CliProvider::Claude)
+            } else {
+                Err(LoopError::CliNotFound(
+                    "Claude CLI not found. Install it with: npm install -g @anthropic-ai/claude-code"
+                        .to_string(),
+                ))
+            }
+        }
+        "codex" => {
+            if is_codex_installed() {
+                Ok(CliProvider::Codex)
+            } else {
+                Err(LoopError::CliNotFound(
+                    "Codex CLI not found. Install it with: npm install -g @openai/codex"
+                        .to_string(),
+                ))
+            }
+        }
+        other => Err(LoopError::InvalidCli(other.to_string())),
+    }
+}
+
+/// How long to wait with no output before considering the agent "idle" and restarting.
 /// 2 seconds works now that marker detection uses OSC escape sequences (no false positives).
 const IDLE_TIMEOUT_SECS: u64 = 2;
 
@@ -186,7 +244,7 @@ enum PtyCmd {
 }
 
 /// Manages a ralph loop using PTY for full terminal emulation.
-/// Auto-restarts when Claude becomes idle (unless paused).
+/// Auto-restarts when the agent becomes idle (unless paused).
 ///
 /// This implementation uses tokio throughout for proper async cancellation.
 pub struct RalphLoop {
@@ -194,7 +252,7 @@ pub struct RalphLoop {
     pub agent_dir: PathBuf,
     /// The target repo root where commands are executed
     pub working_dir: PathBuf,
-    /// True for ralph loops (has PROMPT.md, auto-restarts), false for Claude instances
+    /// True for ralph loops (has PROMPT.md, auto-restarts), false for single sessions
     is_ralph_loop: bool,
     /// Cancellation token for clean shutdown
     cancel_token: CancellationToken,
@@ -232,7 +290,7 @@ impl RalphLoop {
         None
     }
 
-    /// Send raw input to the Claude PTY (keyboard input forwarding).
+    /// Send raw input to the PTY (keyboard input forwarding).
     pub fn send_input(&self, data: &[u8]) -> Result<(), LoopError> {
         let Some(ref tx) = self.cmd_tx else {
             return Err(LoopError::NotRunning);
@@ -256,7 +314,7 @@ impl RalphLoop {
 
     /// Start the ralph loop with PTY and auto-restart on idle.
     /// Sends raw terminal data through the channel for full TUI rendering.
-    /// For Claude instances (is_ralph_loop=false), runs a single session without auto-restart.
+    /// For single sessions (is_ralph_loop=false), runs a single session without auto-restart.
     pub fn start(
         &mut self,
         agent_name: String,
@@ -273,7 +331,7 @@ impl RalphLoop {
             return Err(LoopError::ProjectNotFound(path));
         }
 
-        // Only require PROMPT.md for ralph loops, not Claude instances
+        // Only require PROMPT.md for ralph loops, not single sessions
         let prompt_content =
             if self.is_ralph_loop {
                 let prompt_path = path.join("PROMPT.md");
@@ -287,9 +345,7 @@ impl RalphLoop {
                 None
             };
 
-        if !is_claude_installed() {
-            return Err(LoopError::ClaudeNotFound);
-        }
+        let cli_provider = resolve_cli_provider()?;
 
         // Reset state
         self.cancel_token = CancellationToken::new();
@@ -321,6 +377,7 @@ impl RalphLoop {
                 prompt_content,
                 agent_name,
                 is_ralph_loop,
+                cli_provider,
                 initial_size,
             )
             .await;
@@ -330,8 +387,8 @@ impl RalphLoop {
         Ok(())
     }
 
-    /// Main loop that manages Claude iterations.
-    /// For ralph loops, restarts on idle. For Claude instances, runs once.
+    /// Main loop that manages iterations.
+    /// For ralph loops, restarts on idle. For single sessions, runs once.
     async fn run_loop(
         cancel_token: CancellationToken,
         running: Arc<AtomicBool>,
@@ -343,6 +400,7 @@ impl RalphLoop {
         prompt_content: Option<String>,
         agent_name: String,
         is_ralph_loop: bool,
+        cli_provider: CliProvider,
         initial_size: (u16, u16),
     ) {
         // Send Starting state change on initial start (from stopped state)
@@ -363,7 +421,7 @@ impl RalphLoop {
                 break;
             }
 
-            let result = Self::spawn_claude_iteration(
+            let result = Self::spawn_iteration(
                 &cancel_token,
                 &paused,
                 &mut cmd_rx,
@@ -373,6 +431,7 @@ impl RalphLoop {
                 prompt_content.as_deref(),
                 &agent_name,
                 is_ralph_loop,
+                cli_provider,
                 initial_size,
             )
             .await;
@@ -386,7 +445,7 @@ impl RalphLoop {
                     ))
                     .await;
 
-                // For Claude instances, don't retry on error - just stop
+                // For single sessions, don't retry on error - just stop
                 if !is_ralph_loop {
                     break;
                 }
@@ -396,7 +455,7 @@ impl RalphLoop {
                 continue;
             }
 
-            // For Claude instances, don't auto-restart - exit after single session
+            // For single sessions, don't auto-restart - exit after single session
             if !is_ralph_loop {
                 let _ = tx
                     .send(TerminalData::new(
@@ -437,9 +496,9 @@ impl RalphLoop {
         running.store(false, Ordering::SeqCst);
     }
 
-    /// Spawn and manage a single Claude iteration.
+    /// Spawn and manage a single iteration.
     /// Returns when the iteration completes (child exits, idle timeout, or cancellation).
-    async fn spawn_claude_iteration(
+    async fn spawn_iteration(
         cancel_token: &CancellationToken,
         paused: &Arc<AtomicBool>,
         cmd_rx: &mut mpsc::Receiver<PtyCmd>,
@@ -449,6 +508,7 @@ impl RalphLoop {
         _prompt_content: Option<&str>,
         agent_name: &str,
         is_ralph_loop: bool,
+        cli_provider: CliProvider,
         initial_size: (u16, u16),
     ) -> Result<(), LoopError> {
         // Validate initial size - use defaults if invalid
@@ -467,16 +527,28 @@ impl RalphLoop {
             LoopError::PtyError(format!("Failed to resize PTY to {}x{}: {}", rows, cols, e))
         })?;
 
-        // Build the command based on agent type
-        let cmd_str = if is_ralph_loop {
-            let prompt_path = agent_dir.join("PROMPT.md");
-            let prompt_path_str = prompt_path.to_string_lossy();
-            format!(
-                "cat '{}' | claude --dangerously-skip-permissions",
-                prompt_path_str
-            )
-        } else {
-            "claude --dangerously-skip-permissions".to_string()
+        // Build the command based on agent type and CLI provider
+        let cmd_str = match (cli_provider, is_ralph_loop) {
+            (CliProvider::Claude, true) => {
+                let prompt_path = agent_dir.join("PROMPT.md");
+                let prompt_path_str = prompt_path.to_string_lossy();
+                format!(
+                    "cat '{}' | claude --dangerously-skip-permissions",
+                    prompt_path_str
+                )
+            }
+            (CliProvider::Claude, false) => "claude --dangerously-skip-permissions".to_string(),
+            (CliProvider::Codex, true) => {
+                let prompt_path = agent_dir.join("PROMPT.md");
+                let prompt_path_str = prompt_path.to_string_lossy();
+                format!(
+                    "cat '{}' | codex exec --dangerously-bypass-approvals-and-sandbox -",
+                    prompt_path_str
+                )
+            }
+            (CliProvider::Codex, false) => {
+                "codex --dangerously-bypass-approvals-and-sandbox".to_string()
+            }
         };
 
         // Spawn the child process using pty_process::Command
@@ -508,16 +580,16 @@ impl RalphLoop {
                         ProcessState::Exiting,
                     )).await;
 
-                    // Graceful shutdown: send double Ctrl+C to exit Claude Code
+                    // Graceful shutdown: send double Ctrl+C to exit the CLI
                     // First Ctrl+C cancels current operation, second Ctrl+C exits
                     let _ = pty_write.write_all(&[0x03]).await;
                     let _ = pty_write.flush().await;
 
-                    // Wait for Claude to respond before sending second Ctrl+C
+                    // Wait for the CLI to respond before sending second Ctrl+C
                     // This detects actual processing rather than using a fixed timer
                     tokio::select! {
                         biased;
-                        // If we get output, Claude processed the first Ctrl+C
+                        // If we get output, the CLI processed the first Ctrl+C
                         result = pty_read.read(&mut buf) => {
                             if let Ok(n) = result {
                                 if n > 0 {
@@ -534,7 +606,7 @@ impl RalphLoop {
                         }
                     }
 
-                    // Send second Ctrl+C to exit Claude Code
+                    // Send second Ctrl+C to exit the CLI
                     let _ = pty_write.write_all(&[0x03]).await;
                     let _ = pty_write.flush().await;
 
@@ -645,8 +717,8 @@ impl RalphLoop {
                         break;
                     }
 
-                    // Only apply idle timeout for ralph loops, not Claude instances
-                    if is_ralph_loop {
+                    // Only apply idle timeout for ralph loops on Claude CLI
+                    if is_ralph_loop && cli_provider == CliProvider::Claude {
                         let idle_duration = last_activity.elapsed();
                         if !paused.load(Ordering::SeqCst)
                             && idle_duration > Duration::from_secs(IDLE_TIMEOUT_SECS)

@@ -20,7 +20,7 @@ pub enum AgentType {
     /// A ralph loop with PROMPT.md that runs continuously
     #[default]
     RalphLoop,
-    /// A single Claude instance without a prompt file (no auto-restart)
+    /// A single session without a prompt file (no auto-restart)
     ClaudeInstance,
 }
 
@@ -35,7 +35,7 @@ pub enum ProcessState {
     Stopping,
     /// Sent Ctrl+C, waiting for graceful exit (cleanup sequences)
     Exiting,
-    /// Process exited naturally (Claude finished or process ended)
+    /// Process exited naturally (session finished or process ended)
     Exited,
     /// Process is not running
     #[default]
@@ -46,7 +46,7 @@ impl fmt::Display for AgentType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AgentType::RalphLoop => write!(f, "Ralph Loop"),
-            AgentType::ClaudeInstance => write!(f, "Claude Instance"),
+            AgentType::ClaudeInstance => write!(f, "Single Session"),
         }
     }
 }
@@ -179,7 +179,7 @@ pub struct Agent {
     pub iteration: u32,
     /// The agent's config directory (.cockpit/agents/<name>) where PROMPT.md and history.log live
     pub agent_dir: Option<PathBuf>,
-    /// The working directory where Claude Code runs (the repo root)
+    /// The working directory where the CLI runs (the repo root)
     pub working_dir: Option<PathBuf>,
     pub ralph_loop: Option<RalphLoop>,
     /// Type of agent: RalphLoop or ClaudeInstance
@@ -356,10 +356,13 @@ impl Agent {
         }
     }
 
-    /// Patterns that indicate Claude Code is ready for input
+    /// Patterns that indicate the CLI is ready for input
     const READY_INDICATORS: &'static [&'static [u8]] = &[
         "❯".as_bytes(), // Claude's prompt character
         b"Claude Code", // Banner text
+        b"OpenAI Codex",
+        b"Codex CLI",
+        b"codex>",
     ];
 
     /// Handle an explicit state change event from loop_manager.
@@ -389,7 +392,7 @@ impl Agent {
                 self.process_state = ProcessState::Exited;
 
                 // Update AgentStatus to Stopped in these cases:
-                // 1. Claude instances - they don't auto-restart
+                // 1. Single sessions - they don't auto-restart
                 // 2. Agent was paused when process exited (e.g., user Ctrl+C'd a paused agent)
                 //    The user explicitly killed it, so treat as a stop
                 if self.agent_type == AgentType::ClaudeInstance
@@ -427,14 +430,18 @@ impl Agent {
             return;
         }
 
-        // Transition to Ready when we see Claude Code output (prompt or banner)
+        // Transition to Ready when we see CLI output (prompt or banner)
         // This auto-detects readiness from terminal output
         if self.process_state == ProcessState::Starting {
             let contains_ready_indicator = Self::READY_INDICATORS
                 .iter()
                 .any(|indicator| data.windows(indicator.len()).any(|w| w == *indicator));
 
-            if contains_ready_indicator {
+            let has_visible_output = data.iter().any(|b| {
+                *b >= 0x80 || !b.is_ascii_control() || *b == b'\n' || *b == b'\r' || *b == b'\t'
+            });
+
+            if contains_ready_indicator || has_visible_output {
                 self.process_state = ProcessState::Ready;
             }
         }
@@ -688,7 +695,8 @@ impl Agent {
             | LoopError::ProjectNotFound(_)
             | LoopError::PromptNotFound
             | LoopError::PauseNotSupported
-            | LoopError::ClaudeNotFound
+            | LoopError::CliNotFound(_)
+            | LoopError::InvalidCli(_)
             | LoopError::PauseFailed(_)
             | LoopError::ResumeFailed(_) => false,
         }

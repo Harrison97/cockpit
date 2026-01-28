@@ -727,7 +727,7 @@ impl App {
             );
 
             let type_label = match agent_info.agent_type {
-                AgentType::ClaudeInstance => "Claude instance",
+                AgentType::ClaudeInstance => "Single session",
                 AgentType::RalphLoop => "Ralph loop",
             };
 
@@ -844,7 +844,7 @@ impl App {
 
         let prompt_content = self.input_buffer.clone();
 
-        // Determine agent type: empty prompt = ClaudeInstance, otherwise RalphLoop
+        // Determine agent type: empty prompt = single session, otherwise RalphLoop
         let agent_type = if prompt_content.trim().is_empty() {
             AgentType::ClaudeInstance
         } else {
@@ -886,7 +886,7 @@ impl App {
                 self.agents.push(agent);
                 self.selected_index = self.agents.len() - 1;
                 let type_label = match agent_type {
-                    AgentType::ClaudeInstance => "Claude instance",
+                    AgentType::ClaudeInstance => "Single session",
                     AgentType::RalphLoop => "Ralph loop",
                 };
                 info!(name = %agent_name, agent_type = type_label, "agent created");
@@ -1160,7 +1160,7 @@ impl App {
 
         match code {
             KeyCode::Enter => {
-                // If buffer ends with backslash, replace it with newline (like Claude Code)
+                // If buffer ends with backslash, replace it with newline (like the CLI)
                 if self.input_buffer.ends_with('\\') {
                     self.input_buffer.pop();
                     self.input_buffer.push('\n');

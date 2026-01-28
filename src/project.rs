@@ -64,7 +64,7 @@ impl RalphProject {
     /// Create a new ralph project at the given path.
     ///
     /// Creates the directory structure and writes initial files:
-    /// - PROMPT.md with provided content (skipped if empty - creates a Claude instance)
+    /// - PROMPT.md with provided content (skipped if empty - creates a single session)
     /// - IMPLEMENTATION_PLAN.md with template
     /// - specs/ directory
     pub fn create(
@@ -81,7 +81,7 @@ impl RalphProject {
         let prompt_path = path.join("PROMPT.md");
 
         // Only write PROMPT.md if content is provided (non-empty)
-        // Empty prompt = Claude instance (no prompt file)
+        // Empty prompt = single session (no prompt file)
         if !prompt_content.trim().is_empty() {
             fs::write(&prompt_path, prompt_content)?;
         }
